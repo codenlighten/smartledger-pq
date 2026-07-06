@@ -49,6 +49,15 @@ pub struct NodeConfig {
     /// Base consensus timeout in milliseconds (grows linearly with round).
     #[serde(default = "default_timeout_ms")]
     pub base_timeout_ms: u64,
+    /// Publish a public-chain checkpoint every N finalized blocks. `0` disables
+    /// anchoring.
+    #[serde(default)]
+    pub anchor_interval: u64,
+    /// If set (and anchoring is enabled), append anchor records to this file
+    /// (a local stand-in for a public chain). Otherwise an in-memory backend is
+    /// used.
+    #[serde(default)]
+    pub anchor_file: Option<String>,
 }
 
 fn default_timeout_ms() -> u64 {

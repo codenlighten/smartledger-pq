@@ -4,6 +4,7 @@ members = [
     "crates/crypto",
     "crates/ledger",
     "crates/consensus",
+    "crates/anchor",
     "crates/node",
 ]
 
@@ -29,6 +30,7 @@ thiserror = "2"
 slc-crypto = { path = "crates/crypto" }
 slc-ledger = { path = "crates/ledger" }
 slc-consensus = { path = "crates/consensus" }
+slc-anchor = { path = "crates/anchor" }
 
 [profile.release]
 lto = true

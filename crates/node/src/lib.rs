@@ -31,3 +31,6 @@ pub use event::Event;
 pub use node::{Node, NodeHandle};
 pub use transport::Transport;
 pub use wire::WireMsg;
+
+// Re-export the anchoring surface for convenience.
+pub use slc_anchor::{AnchorRecord, AnchorService};

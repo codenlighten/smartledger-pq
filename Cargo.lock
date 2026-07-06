@@ -204,6 +204,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "slc-anchor"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "serde",
+ "serde_json",
+ "slc-crypto",
+ "slc-ledger",
+ "thiserror",
+]
+
+[[package]]
 name = "slc-consensus"
 version = "0.1.0"
 dependencies = [
@@ -241,6 +253,7 @@ dependencies = [
  "hex",
  "serde",
  "serde_json",
+ "slc-anchor",
  "slc-consensus",
  "slc-crypto",
  "slc-ledger",

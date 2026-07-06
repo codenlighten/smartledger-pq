@@ -7,6 +7,7 @@ use crate::storage::BlockStore;
 use crate::timers::TimerService;
 use crate::transport::Transport;
 use crate::wire::WireMsg;
+use slc_anchor::{AnchorRecord, AnchorService};
 use slc_consensus::{Effect, Engine};
 use slc_crypto::{SigningKey, VerifyingKey};
 use slc_ledger::{Attestation, Block, ValidatorSet};
@@ -33,12 +34,17 @@ pub struct Node {
     ev_rx: Receiver<Event>,
     ev_tx: Sender<Event>,
     base_timeout: Duration,
+    /// Publishes periodic checkpoints to a public chain, when configured.
+    anchor: Option<AnchorService>,
+    /// Observable log of every checkpoint this node has anchored.
+    anchor_records: Arc<Mutex<Vec<AnchorRecord>>>,
 }
 
 /// A handle to a spawned node: submit attestations, observe commits, shut down.
 pub struct NodeHandle {
     ev_tx: Sender<Event>,
     committed: Arc<Mutex<Vec<Block>>>,
+    anchor_records: Arc<Mutex<Vec<AnchorRecord>>>,
     local_addr: SocketAddr,
     join: JoinHandle<()>,
 }
@@ -52,6 +58,11 @@ impl NodeHandle {
     /// Shared view of every block this node has finalized.
     pub fn committed(&self) -> Arc<Mutex<Vec<Block>>> {
         self.committed.clone()
+    }
+
+    /// Shared view of every checkpoint this node has anchored.
+    pub fn anchor_records(&self) -> Arc<Mutex<Vec<AnchorRecord>>> {
+        self.anchor_records.clone()
     }
 
     pub fn local_addr(&self) -> SocketAddr {
@@ -96,18 +107,28 @@ impl Node {
             ev_rx,
             ev_tx,
             base_timeout,
+            anchor: None,
+            anchor_records: Arc::new(Mutex::new(Vec::new())),
         }
+    }
+
+    /// Enable periodic public-chain anchoring with the given service.
+    pub fn with_anchor(mut self, service: AnchorService) -> Node {
+        self.anchor = Some(service);
+        self
     }
 
     /// Run the node on its own thread, returning a handle.
     pub fn spawn(self) -> NodeHandle {
         let ev_tx = self.ev_tx.clone();
         let committed = self.store.handle();
+        let anchor_records = self.anchor_records.clone();
         let local_addr = self.transport.local_addr();
         let join = thread::spawn(move || self.run());
         NodeHandle {
             ev_tx,
             committed,
+            anchor_records,
             local_addr,
             join,
         }
@@ -156,6 +177,15 @@ impl Node {
                 }
                 Effect::Committed(block) => {
                     self.store.append(&block);
+                    // Feed the finalized block to the anchoring service; when a
+                    // full checkpoint window closes, its root is published.
+                    if let Some(anchor) = &mut self.anchor {
+                        if let Some(record) =
+                            anchor.record_block(block.header.id(), block.header.height)
+                        {
+                            self.anchor_records.lock().unwrap().push(record);
+                        }
+                    }
                 }
             }
         }
