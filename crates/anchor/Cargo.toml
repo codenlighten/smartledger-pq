@@ -11,3 +11,11 @@ serde.workspace = true
 serde_json.workspace = true
 hex.workspace = true
 thiserror.workspace = true
+# Optional: the live notaryhash.com (BSV) anchor backend.
+ureq = { version = "2", features = ["json"], optional = true }
+base64 = { version = "0.22", optional = true }
+
+[features]
+# Enables NotaryHashAnchor, which anchors checkpoints to BSV mainnet via the
+# notaryhash.com notarize API. Off by default to keep the core dependency-light.
+notaryhash = ["dep:ureq", "dep:base64"]

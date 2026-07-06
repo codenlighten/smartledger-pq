@@ -19,7 +19,13 @@ mod checkpoint;
 mod proof;
 mod service;
 
+#[cfg(feature = "notaryhash")]
+mod notaryhash;
+
 pub use backend::{AnchorBackend, AnchorError, FileAnchor, MockAnchor, Receipt};
 pub use checkpoint::{Checkpoint, CheckpointInclusion};
 pub use proof::{AnchorRecord, AnchoredProof};
 pub use service::AnchorService;
+
+#[cfg(feature = "notaryhash")]
+pub use notaryhash::NotaryHashAnchor;
