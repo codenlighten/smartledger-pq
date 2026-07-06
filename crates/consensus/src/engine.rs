@@ -37,6 +37,10 @@ pub enum TimeoutKind {
 }
 
 /// A side effect the driver must carry out.
+///
+/// Variants differ a lot in size because post-quantum objects are large (an
+/// ML-DSA signature alone is ~3.3 KB); that is intrinsic, not an oversight.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug)]
 pub enum Effect {
     /// Send this message to every other validator (and, conceptually, self).
@@ -47,8 +51,9 @@ pub enum Effect {
         round: u64,
         kind: TimeoutKind,
     },
-    /// A block was finalized. Persist it and serve proofs from it.
-    Committed(Block),
+    /// A block was finalized. Persist it and serve proofs from it. Boxed
+    /// because a `Block` is far larger than the other effect variants.
+    Committed(Box<Block>),
 }
 
 /// What a vote count should match.
@@ -387,7 +392,7 @@ impl Engine {
             if let Some(m) = self.precommits.get(&r) {
                 voters.extend(m.keys().copied());
             }
-            if voters.len() >= self.f() + 1 {
+            if voters.len() > self.f() {
                 self.start_round(r, out);
                 return true;
             }
@@ -423,7 +428,7 @@ impl Engine {
             return false;
         }
         let pm = match self.proposals.get(&self.round) {
-            Some(p) if p.valid_round.map_or(false, |vr| vr < self.round) => p.clone(),
+            Some(p) if p.valid_round.is_some_and(|vr| vr < self.round) => p.clone(),
             _ => return false,
         };
         let vr = pm.valid_round.expect("checked");
@@ -432,7 +437,7 @@ impl Engine {
         }
         let v = &pm.value;
         let acceptable =
-            self.locked_round.map_or(true, |lr| lr <= vr) || self.locked_id() == Some(v.id());
+            self.locked_round.is_none_or(|lr| lr <= vr) || self.locked_id() == Some(v.id());
         let id = if v.is_valid(self.tip, self.height) && acceptable {
             Some(v.id())
         } else {
@@ -536,7 +541,7 @@ impl Engine {
         let sealed: HashSet<Hash> = block.attestations.iter().map(|a| a.leaf_hash()).collect();
         self.mempool.retain(|a| !sealed.contains(&a.leaf_hash()));
 
-        out.push(Effect::Committed(block));
+        out.push(Effect::Committed(Box::new(block)));
 
         // Roll forward to the next height with fully reset per-height state.
         self.height += 1;

@@ -69,7 +69,7 @@ impl Sim {
                     round,
                     kind,
                 } => self.timerq.push_back((i, height, round, kind)),
-                Effect::Committed(block) => self.commits[i].push(block),
+                Effect::Committed(block) => self.commits[i].push(*block),
             }
         }
     }

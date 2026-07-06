@@ -49,26 +49,38 @@ crates/
             certificates, portable notarization proofs
   consensus/ Quorum-Certified Notary BFT + view change,     ✅ implemented
             deterministic engine + in-memory network tests
+  node/      TCP gossip, timers, storage, daemon + CLI,      ✅ implemented
+            real 4-node devnet integration test
   anchor/    periodic checkpoint anchoring to a public chain ⏳ planned
-  node/      p2p networking, mempool, storage, daemon, CLI   ⏳ planned
 ```
+
+Known limitation: the engine proposes every height continuously, so a running
+node currently produces empty blocks when idle. **Attestation-triggered block
+production** (only build a block when there are pending attestations) is the next
+refinement before leaving a node running long-term.
 
 ## Try it
 
 ```sh
-cargo test                                   # full suite (crypto + ledger + e2e)
+cargo test                                   # full suite (26 tests, incl. TCP devnet)
 cargo run -p slc-ledger --example demo       # notarize a doc, print a proof
+cargo run -p slc-node --bin slc-node keygen validator.key   # make a validator key
 ```
+
+The `slc-node` binary runs a validator from a JSON config (`slc-node run
+config.json`); a 4-node network reaching consensus over real TCP is exercised by
+`crates/node/tests/devnet.rs`.
 
 ## Status
 
-The **value chain and consensus are complete and tested** (24 tests): attest →
-Merkle batch → block → quorum certificate → portable proof → verify, plus a full
-BFT engine that finalizes blocks, survives view changes, and generalizes across
-N-validator/F-fault thresholds. Adversarial coverage includes forged hashes,
-substituted identities, insufficient quorums, outsider signatures, and crashed
-proposers. Networking transport, public anchoring, and the node daemon/CLI are
-the next milestones.
+The **value chain, consensus, and a running node are complete and tested** (26
+tests): attest → Merkle batch → block → quorum certificate → portable proof →
+verify; a full BFT engine that finalizes blocks, survives view changes, and
+generalizes across N-validator/F-fault thresholds; and a real 4-node network that
+notarizes a document over TCP and independently agrees on the block. Adversarial
+coverage includes forged hashes, substituted identities, insufficient quorums,
+outsider signatures, and crashed proposers. Public anchoring, attestation-
+triggered block production, and a client SDK/CLI are the next milestones.
 
 ## Cryptography
 

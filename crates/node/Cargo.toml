@@ -1,0 +1,22 @@
+[package]
+name = "slc-node"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "slc_node"
+path = "src/lib.rs"
+
+[[bin]]
+name = "slc-node"
+path = "src/bin/slc-node.rs"
+
+[dependencies]
+slc-crypto.workspace = true
+slc-ledger.workspace = true
+slc-consensus.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+hex.workspace = true
+thiserror.workspace = true

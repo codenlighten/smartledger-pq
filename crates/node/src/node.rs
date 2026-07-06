@@ -1,0 +1,169 @@
+//! The node: it wires the consensus [`Engine`] to a real network, real timers,
+//! and disk, then serializes every input through one event loop.
+
+use crate::config::GenesisConfig;
+use crate::event::Event;
+use crate::storage::BlockStore;
+use crate::timers::TimerService;
+use crate::transport::Transport;
+use crate::wire::WireMsg;
+use slc_consensus::{Effect, Engine};
+use slc_crypto::{Hash, SigningKey, VerifyingKey};
+use slc_ledger::{Attestation, Block, ValidatorSet};
+use std::net::SocketAddr;
+use std::path::Path;
+use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::{Arc, Mutex};
+use std::thread::{self, JoinHandle};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+fn now_unix() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// A running node. Build with [`Node::new`], then [`Node::spawn`].
+pub struct Node {
+    engine: Engine,
+    transport: Transport,
+    timers: TimerService,
+    store: BlockStore,
+    ev_rx: Receiver<Event>,
+    ev_tx: Sender<Event>,
+    base_timeout: Duration,
+}
+
+/// A handle to a spawned node: submit attestations, observe commits, shut down.
+pub struct NodeHandle {
+    ev_tx: Sender<Event>,
+    committed: Arc<Mutex<Vec<Block>>>,
+    local_addr: SocketAddr,
+    join: JoinHandle<()>,
+}
+
+impl NodeHandle {
+    /// Submit an attestation for notarization (gossiped to all validators).
+    pub fn submit(&self, att: Attestation) {
+        let _ = self.ev_tx.send(Event::Submit(att));
+    }
+
+    /// Shared view of every block this node has finalized.
+    pub fn committed(&self) -> Arc<Mutex<Vec<Block>>> {
+        self.committed.clone()
+    }
+
+    pub fn local_addr(&self) -> SocketAddr {
+        self.local_addr
+    }
+
+    /// Ask the loop to stop and wait for it.
+    pub fn shutdown(self) {
+        let _ = self.ev_tx.send(Event::Shutdown);
+        let _ = self.join.join();
+    }
+}
+
+impl Node {
+    /// Assemble a node from a bound `transport`, the genesis config, and this
+    /// node's own keypair. `store_path` may be `None` for an in-memory store.
+    pub fn new(
+        transport: Transport,
+        genesis: &GenesisConfig,
+        me_sk: SigningKey,
+        me_pk: VerifyingKey,
+        store_path: Option<&Path>,
+        base_timeout: Duration,
+    ) -> Node {
+        let set = ValidatorSet::bft(genesis.validator_keys());
+        let engine = Engine::new(set, me_sk, me_pk, Hash::zero(), 1);
+        let (ev_tx, ev_rx) = channel();
+        transport
+            .start_accept(ev_tx.clone())
+            .expect("start accept loop");
+        let timers = TimerService::start(ev_tx.clone());
+        let store = BlockStore::open(store_path);
+        Node {
+            engine,
+            transport,
+            timers,
+            store,
+            ev_rx,
+            ev_tx,
+            base_timeout,
+        }
+    }
+
+    /// Run the node on its own thread, returning a handle.
+    pub fn spawn(self) -> NodeHandle {
+        let ev_tx = self.ev_tx.clone();
+        let committed = self.store.handle();
+        let local_addr = self.transport.local_addr();
+        let join = thread::spawn(move || self.run());
+        NodeHandle {
+            ev_tx,
+            committed,
+            local_addr,
+            join,
+        }
+    }
+
+    fn run(mut self) {
+        // Kick off consensus at the starting height.
+        self.engine.set_time(now_unix());
+        let effects = self.engine.start();
+        self.handle_effects(effects);
+
+        while let Ok(event) = self.ev_rx.recv() {
+            self.engine.set_time(now_unix());
+            let effects = match event {
+                Event::Wire(WireMsg::Consensus(msg)) => self.engine.on_message(msg),
+                Event::Wire(WireMsg::Attestation(att)) => {
+                    self.engine.add_attestation(att);
+                    Vec::new()
+                }
+                Event::Timeout(h, r, kind) => self.engine.on_timeout(h, r, kind),
+                Event::Submit(att) => {
+                    // Gossip to peers so the next proposer can include it, then
+                    // queue it locally.
+                    self.transport.broadcast(&WireMsg::Attestation(att.clone()));
+                    self.engine.add_attestation(att);
+                    Vec::new()
+                }
+                Event::Shutdown => {
+                    self.timers.stop();
+                    break;
+                }
+            };
+            self.handle_effects(effects);
+        }
+    }
+
+    fn handle_effects(&mut self, effects: Vec<Effect>) {
+        for effect in effects {
+            match effect {
+                Effect::Broadcast(msg) => {
+                    self.transport.broadcast(&WireMsg::Consensus(msg));
+                }
+                Effect::ScheduleTimeout {
+                    height,
+                    round,
+                    kind,
+                } => {
+                    self.timers
+                        .schedule(height, round, kind, self.timeout_for(round));
+                }
+                Effect::Committed(block) => {
+                    self.store.append(&block);
+                }
+            }
+        }
+    }
+
+    /// Timeouts grow linearly with the round so a congested view eventually
+    /// gives everyone enough time to converge.
+    fn timeout_for(&self, round: u64) -> Duration {
+        self.base_timeout * (round as u32 + 1)
+    }
+}

@@ -117,7 +117,7 @@ impl MerkleTree {
         let mut idx = index;
         for level in 0..self.levels.len() - 1 {
             let nodes = &self.levels[level];
-            if idx % 2 == 0 {
+            if idx.is_multiple_of(2) {
                 // Left child. It has a right sibling unless it is a lone
                 // promoted node, in which case there is no hop at this level.
                 if idx + 1 < nodes.len() {

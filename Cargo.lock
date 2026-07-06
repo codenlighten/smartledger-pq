@@ -235,6 +235,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "slc-node"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "serde",
+ "serde_json",
+ "slc-consensus",
+ "slc-crypto",
+ "slc-ledger",
+ "thiserror",
+]
+
+[[package]]
 name = "syn"
 version = "2.0.118"
 source = "registry+https://github.com/rust-lang/crates.io-index"
