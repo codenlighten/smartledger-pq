@@ -104,6 +104,23 @@ fn four_node_devnet_notarizes_over_tcp() {
     assert_eq!(proof.hash(), target);
     assert!(block0.header.height >= 1);
 
+    // 7. The idle chain mints no empty blocks. Let it run a moment longer with
+    //    nothing to notarize, then assert every committed block is non-empty and
+    //    the chain has not ballooned — production is strictly attestation-driven.
+    std::thread::sleep(Duration::from_millis(400));
+    for o in &observers {
+        let blocks = o.lock().unwrap();
+        assert!(
+            blocks.iter().all(|b| !b.attestations.is_empty()),
+            "no block may be empty — blocks exist only to notarize"
+        );
+        assert!(
+            blocks.len() <= 3,
+            "an idle chain must not spew blocks (saw {})",
+            blocks.len()
+        );
+    }
+
     for h in handles {
         h.shutdown();
     }

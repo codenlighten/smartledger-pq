@@ -26,7 +26,14 @@ impl Proposed {
 
     /// Is this a well-formed value to build on top of `tip` at `height`? Checks
     /// structural integrity only; each attestation must also self-verify.
+    ///
+    /// A valid block is **never empty**: blocks exist only to notarize, so an
+    /// empty block is rejected here. This makes empty-block production not just
+    /// discouraged but structurally impossible — no quorum will ratify one.
     pub fn is_valid(&self, tip: Hash, height: u64) -> bool {
+        if self.attestations.is_empty() {
+            return false;
+        }
         if self.header.height != height || self.header.prev_hash != tip {
             return false;
         }
@@ -201,5 +208,48 @@ fn verify_vote(
     match (vote_type, block_id) {
         (VoteType::Precommit, Some(id)) => pk.verify(id.as_bytes(), sig, context::BLOCK),
         _ => pk.verify(&vote_signing_bytes(height, round, vote_type, block_id), sig, context::VOTE),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use slc_crypto::SigningKey;
+    use slc_ledger::BlockHeader;
+
+    #[test]
+    fn empty_block_is_invalid() {
+        // A header claiming zero transactions can never be a valid value.
+        let header = BlockHeader {
+            height: 1,
+            prev_hash: Hash::zero(),
+            merkle_root: slc_ledger::merkle::empty_root(),
+            tx_count: 0,
+            timestamp: 0,
+        };
+        let value = Proposed {
+            header,
+            attestations: vec![],
+        };
+        assert!(!value.is_valid(Hash::zero(), 1), "empty blocks must be rejected");
+    }
+
+    #[test]
+    fn well_formed_block_is_valid() {
+        let (sk, pk) = SigningKey::generate().unwrap();
+        let att = Attestation::create(&sk, &pk, Hash::digest(b"doc")).unwrap();
+        let merkle_root = MerkleTree::build(vec![att.leaf_hash()]).root();
+        let header = BlockHeader {
+            height: 1,
+            prev_hash: Hash::zero(),
+            merkle_root,
+            tx_count: 1,
+            timestamp: 0,
+        };
+        let value = Proposed {
+            header,
+            attestations: vec![att],
+        };
+        assert!(value.is_valid(Hash::zero(), 1));
     }
 }

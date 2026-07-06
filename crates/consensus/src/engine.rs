@@ -101,6 +101,11 @@ pub struct Engine {
     prevote_timeout_started: HashSet<u64>,
     precommit_timeout_started: HashSet<u64>,
     polka_applied: HashSet<u64>,
+
+    /// True when we have entered a fresh height (round 0) with nothing to
+    /// notarize and are idling. A local attestation or any consensus activity
+    /// un-parks us. This is what keeps an idle chain from minting empty blocks.
+    parked: bool,
 }
 
 impl Engine {
@@ -137,6 +142,7 @@ impl Engine {
             prevote_timeout_started: HashSet::new(),
             precommit_timeout_started: HashSet::new(),
             polka_applied: HashSet::new(),
+            parked: false,
         }
     }
 
@@ -158,9 +164,22 @@ impl Engine {
         self.now = now;
     }
 
-    /// Queue an attestation for inclusion in a future block.
-    pub fn add_attestation(&mut self, att: Attestation) {
+    /// Queue an attestation for inclusion in a future block. If we were idling
+    /// (parked) with nothing to notarize, this wakes us up and — if we are the
+    /// proposer — kicks off a block. Returns any resulting effects.
+    pub fn add_attestation(&mut self, att: Attestation) -> Vec<Effect> {
         self.mempool.push(att);
+        let mut out = Vec::new();
+        if self.parked {
+            self.unpark(&mut out);
+            self.advance(&mut out);
+        }
+        out
+    }
+
+    /// Whether the engine is currently idling with nothing to notarize.
+    pub fn is_parked(&self) -> bool {
+        self.parked
     }
 
     /// Begin consensus at the starting height (round 0).
@@ -174,9 +193,19 @@ impl Engine {
     /// Handle an inbound consensus message.
     pub fn on_message(&mut self, msg: ConsensusMsg) -> Vec<Effect> {
         let mut out = Vec::new();
+        // Always ingest (so votes are recorded even while we are parked), but
+        // only *wake up* for something real to do: a proposal for our current
+        // height means there is an actual block to vote on. We deliberately do
+        // NOT un-park on votes or on stale/other-height messages — otherwise an
+        // idle node would churn empty rounds forever, since an empty block can
+        // never be finalized.
+        let wake = matches!(&msg, ConsensusMsg::Proposal(pm) if pm.height == self.height);
         match msg {
             ConsensusMsg::Proposal(pm) => self.ingest_proposal(pm),
             ConsensusMsg::Vote(vm) => self.ingest_vote(vm),
+        }
+        if self.parked && wake && self.proposals.contains_key(&self.round) {
+            self.unpark(&mut out);
         }
         self.advance(&mut out);
         out
@@ -263,20 +292,47 @@ impl Engine {
     fn start_round(&mut self, round: u64, out: &mut Vec<Effect>) {
         self.round = round;
         self.step = Step::Propose;
+        // At the start of a fresh height with nothing pending, idle instead of
+        // proposing. We only reach round 0 with `valid_value == None` (it is
+        // reset on commit), so an empty mempool here means truly nothing to do.
+        if round == 0 && self.valid_value.is_none() && self.mempool.is_empty() {
+            self.parked = true;
+            return;
+        }
+        self.parked = false;
+        self.enter_propose(round, out);
+    }
+
+    /// Enter the propose step for `round`: propose if we can, otherwise arm the
+    /// propose timeout so the round still advances.
+    fn enter_propose(&mut self, round: u64, out: &mut Vec<Effect>) {
         if self.is_proposer(round) {
             let (value, vr) = match &self.valid_value {
                 Some(v) => (v.clone(), self.valid_round),
                 None => (self.get_value(), None),
             };
-            let pm = ProposalMsg::create(&self.me_sk, self.me_pk.clone(), self.height, round, vr, value);
-            self.proposals.entry(round).or_insert_with(|| pm.clone());
-            out.push(Effect::Broadcast(ConsensusMsg::Proposal(pm)));
-        } else {
-            out.push(Effect::ScheduleTimeout {
-                height: self.height,
-                round,
-                kind: TimeoutKind::Propose,
-            });
+            // Never propose an empty block — no quorum would ratify it anyway.
+            // With an empty mempool we instead let the round time out.
+            if !value.attestations.is_empty() {
+                let pm =
+                    ProposalMsg::create(&self.me_sk, self.me_pk.clone(), self.height, round, vr, value);
+                self.proposals.entry(round).or_insert_with(|| pm.clone());
+                out.push(Effect::Broadcast(ConsensusMsg::Proposal(pm)));
+                return;
+            }
+        }
+        out.push(Effect::ScheduleTimeout {
+            height: self.height,
+            round,
+            kind: TimeoutKind::Propose,
+        });
+    }
+
+    /// Leave the idle state and actually enter the current round.
+    fn unpark(&mut self, out: &mut Vec<Effect>) {
+        if self.parked {
+            self.parked = false;
+            self.enter_propose(self.round, out);
         }
     }
 

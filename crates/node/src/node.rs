@@ -119,17 +119,13 @@ impl Node {
             self.engine.set_time(now_unix());
             let effects = match event {
                 Event::Wire(WireMsg::Consensus(msg)) => self.engine.on_message(msg),
-                Event::Wire(WireMsg::Attestation(att)) => {
-                    self.engine.add_attestation(att);
-                    Vec::new()
-                }
+                Event::Wire(WireMsg::Attestation(att)) => self.engine.add_attestation(att),
                 Event::Timeout(h, r, kind) => self.engine.on_timeout(h, r, kind),
                 Event::Submit(att) => {
                     // Gossip to peers so the next proposer can include it, then
-                    // queue it locally.
+                    // queue it locally (which may wake an idle proposer).
                     self.transport.broadcast(&WireMsg::Attestation(att.clone()));
-                    self.engine.add_attestation(att);
-                    Vec::new()
+                    self.engine.add_attestation(att)
                 }
                 Event::Shutdown => {
                     self.timers.stop();
