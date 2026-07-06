@@ -11,9 +11,13 @@
 
 mod hash;
 mod keys;
+mod slh;
 
 pub use hash::Hash;
 pub use keys::{Signature, SigningKey, VerifyingKey, PUBKEY_LEN, SECKEY_LEN, SIG_LEN};
+pub use slh::{
+    SlhSignature, SlhSigningKey, SlhVerifyingKey, SLH_PUBKEY_LEN, SLH_SECKEY_LEN, SLH_SIG_LEN,
+};
 
 use thiserror::Error;
 
@@ -43,4 +47,6 @@ pub mod context {
     pub const VOTE: &[u8] = b"SLC-vote-v1";
     /// A validator approving a change to the validator set (governance).
     pub const GOVERNANCE: &[u8] = b"SLC-governance-v1";
+    /// SmartLedger signing a software license (SLH-DSA).
+    pub const LICENSE: &[u8] = b"SLC-license-v1";
 }

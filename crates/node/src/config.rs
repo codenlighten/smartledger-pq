@@ -84,6 +84,14 @@ pub struct NodeConfig {
     /// Client-facing RPC listen address (e.g. `0.0.0.0:7000`). Disabled if unset.
     #[serde(default)]
     pub rpc_addr: Option<String>,
+    /// Path to a SmartLedger-signed license file. If set, the node verifies it
+    /// on startup and refuses to run if it is invalid or expired.
+    #[serde(default)]
+    pub license_file: Option<String>,
+    /// SmartLedger's license issuer public key (SLH-DSA, hex). Required when
+    /// `license_file` is set.
+    #[serde(default)]
+    pub license_issuer_pubkey: Option<String>,
 }
 
 fn default_timeout_ms() -> u64 {

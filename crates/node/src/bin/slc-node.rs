@@ -76,6 +76,8 @@ fn render_config(out: &str) -> ExitCode {
         notaryhash_api_key_env: env("SLC_NOTARYHASH_API_KEY_ENV"),
         anchor_key_path: env("SLC_ANCHOR_KEY_PATH"),
         rpc_addr: env("SLC_RPC").or_else(|| Some("0.0.0.0:7000".into())),
+        license_file: env("SLC_LICENSE_FILE"),
+        license_issuer_pubkey: env("SLC_LICENSE_ISSUER_PUBKEY"),
     };
 
     match serde_json::to_string_pretty(&cfg) {
@@ -184,6 +186,8 @@ fn init_devnet(dir: &str, n: usize, docker: bool) -> ExitCode {
             notaryhash_api_key_env: None,
             anchor_key_path: None,
             rpc_addr: rpc,
+            license_file: None,
+            license_issuer_pubkey: None,
         };
         if let Err(e) = write(dir.join(format!("node{i}.config.json")), &serde_json::to_value(&cfg).unwrap()) {
             eprintln!("write config failed: {e}");
@@ -237,6 +241,24 @@ fn run(config_path: &str) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+
+    // License gate: if a license is configured, it must verify or the node
+    // refuses to start.
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    match slc_node::license::check(&cfg, &cfg.genesis.chain_id, now) {
+        Ok(None) => {}
+        Ok(Some(ent)) => println!(
+            "license   : valid (max_nodes={:?}, anchoring={}, features={:?})",
+            ent.max_nodes, ent.anchoring, ent.features
+        ),
+        Err(e) => {
+            eprintln!("license check failed: {e}");
+            return ExitCode::FAILURE;
+        }
+    }
 
     let is_validator = cfg.genesis.validators.iter().any(|v| v.pubkey == pk);
 

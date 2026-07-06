@@ -8,13 +8,15 @@
 //!   slc status <node_rpc>                            Show chain height/tip.
 
 use slc_anchor::AnchoredProof;
-use slc_crypto::{Hash, VerifyingKey};
+use slc_crypto::{Hash, SlhVerifyingKey, VerifyingKey};
 use slc_ledger::{NotarizationProof, SignedValidatorChange, ValidatorChange};
+use slc_license::{keystore as licstore, Entitlements, License, SignedLicense};
 use slc_node::client;
 use slc_node::config::GenesisConfig;
 use slc_node::keystore;
 use std::path::Path;
 use std::process::ExitCode;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
@@ -25,6 +27,7 @@ fn main() -> ExitCode {
         Some("pubkey") => pubkey(rest),
         Some("hash") => hash(rest),
         Some("gov") => gov(rest),
+        Some("license") => license(rest),
         Some("notarize") => notarize(rest),
         Some("get-proof") => get_proof(rest),
         Some("get-anchored-proof") => get_anchored_proof(rest),
@@ -59,6 +62,13 @@ fn usage() -> ExitCode {
     eprintln!("  slc gov approve <change.json> <validator-keystore.json>");
     eprintln!("  slc gov submit <change.json> <node_rpc>");
     eprintln!("  slc gov show <change.json>");
+    eprintln!("  slc license keygen <issuer.key>            (SmartLedger)");
+    eprintln!("  slc license issuer-pubkey <issuer.key>");
+    eprintln!("  slc license issue --issuer <issuer.key> --licensee <name> --tier <t> \\");
+    eprintln!("        --expires-days <n> [--chain <id>] [--max-nodes <n>] [--anchoring] \\");
+    eprintln!("        [--features a,b] [--out license.json]");
+    eprintln!("  slc license verify <license.json> --issuer <pubkey-hex> [--chain <id>]");
+    eprintln!("  slc license show <license.json>");
     ExitCode::FAILURE
 }
 
@@ -301,6 +311,125 @@ fn status(a: &[String]) -> R {
     let (height, tip) = client::status(node).map_err(|e| e.to_string())?;
     println!("height: {height}");
     println!("tip   : {tip}");
+    Ok(())
+}
+
+// ---- licensing ------------------------------------------------------------
+
+fn license(a: &[String]) -> R {
+    match a.first().map(String::as_str) {
+        Some("keygen") => lic_keygen(&a[1..]),
+        Some("issuer-pubkey") => lic_issuer_pubkey(&a[1..]),
+        Some("issue") => lic_issue(&a[1..]),
+        Some("verify") => lic_verify(&a[1..]),
+        Some("show") => lic_show(&a[1..]),
+        _ => Err("license <keygen|issuer-pubkey|issue|verify|show> ...".into()),
+    }
+}
+
+fn lic_keygen(a: &[String]) -> R {
+    let path = a.first().ok_or("license keygen <issuer.key>")?;
+    let issuer = licstore::generate(Path::new(path)).map_err(|e| e.to_string())?;
+    println!("wrote issuer keystore: {path}");
+    println!("issuer public key    : {}", issuer.public_key().to_hex());
+    Ok(())
+}
+
+fn lic_issuer_pubkey(a: &[String]) -> R {
+    let path = a.first().ok_or("license issuer-pubkey <issuer.key>")?;
+    let issuer = licstore::load(Path::new(path)).map_err(|e| e.to_string())?;
+    println!("{}", issuer.public_key().to_hex());
+    Ok(())
+}
+
+/// Tiny flag reader: `--k v` (repeatable via caller), `--flag` booleans.
+fn flag<'b>(a: &'b [String], name: &str) -> Option<&'b str> {
+    a.iter().position(|x| x == name).and_then(|i| a.get(i + 1)).map(String::as_str)
+}
+fn has(a: &[String], name: &str) -> bool {
+    a.iter().any(|x| x == name)
+}
+
+fn lic_issue(a: &[String]) -> R {
+    let issuer_path = flag(a, "--issuer").ok_or("--issuer <issuer.key> is required")?;
+    let licensee = flag(a, "--licensee").ok_or("--licensee <name> is required")?;
+    let tier = flag(a, "--tier").unwrap_or("standard");
+    let expires_days: u64 = flag(a, "--expires-days")
+        .ok_or("--expires-days <n> is required")?
+        .parse()
+        .map_err(|_| "bad --expires-days")?;
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+
+    let entitlements = Entitlements {
+        max_nodes: flag(a, "--max-nodes").and_then(|v| v.parse().ok()),
+        max_notarizations_per_month: flag(a, "--max-notarizations").and_then(|v| v.parse().ok()),
+        anchoring: has(a, "--anchoring"),
+        features: flag(a, "--features")
+            .map(|s| s.split(',').map(|x| x.trim().to_string()).collect())
+            .unwrap_or_default(),
+    };
+    let lic = License {
+        licensee: licensee.to_string(),
+        license_id: flag(a, "--id").map(str::to_string).unwrap_or_else(|| format!("LIC-{now}")),
+        product: "smartledger-chain".into(),
+        tier: tier.to_string(),
+        entitlements,
+        chain_id: flag(a, "--chain").map(str::to_string),
+        issued_at: now,
+        expires_at: now + expires_days * 24 * 3600,
+    };
+
+    let issuer = licstore::load(Path::new(issuer_path)).map_err(|e| e.to_string())?;
+    eprintln!("signing license (SLH-DSA, a few seconds)...");
+    let signed = issuer.issue(lic).map_err(|e| e.to_string())?;
+    let json = signed.to_json().map_err(|e| e.to_string())?;
+    match flag(a, "--out") {
+        Some(out) => {
+            std::fs::write(out, &json).map_err(|e| e.to_string())?;
+            println!("wrote license: {out}");
+        }
+        None => println!("{json}"),
+    }
+    Ok(())
+}
+
+fn lic_verify(a: &[String]) -> R {
+    let path = a.first().ok_or("license verify <license.json> --issuer <pubkey-hex>")?;
+    let issuer_hex = flag(a, "--issuer").ok_or("--issuer <pubkey-hex> is required")?;
+    let issuer = SlhVerifyingKey::from_hex(issuer_hex).map_err(|_| "invalid issuer pubkey hex")?;
+    let signed = SignedLicense::from_json(&std::fs::read_to_string(path).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    match signed.verify(&issuer, now, flag(a, "--chain")) {
+        Ok(()) => {
+            println!("VALID ✔");
+            println!("  licensee : {}", signed.license.licensee);
+            println!("  tier     : {}", signed.license.tier);
+            println!("  expires  : {} (unix)", signed.license.expires_at);
+            Ok(())
+        }
+        Err(e) => Err(format!("INVALID — {e}")),
+    }
+}
+
+fn lic_show(a: &[String]) -> R {
+    let path = a.first().ok_or("license show <license.json>")?;
+    let signed = SignedLicense::from_json(&std::fs::read_to_string(path).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
+    let l = &signed.license;
+    println!("licensee   : {}", l.licensee);
+    println!("license_id : {}", l.license_id);
+    println!("product    : {}", l.product);
+    println!("tier       : {}", l.tier);
+    println!("chain_id   : {:?}", l.chain_id);
+    println!("issued_at  : {}", l.issued_at);
+    println!("expires_at : {}", l.expires_at);
+    println!("entitlements:");
+    println!("  max_nodes             : {:?}", l.entitlements.max_nodes);
+    println!("  max_notarizations/mo  : {:?}", l.entitlements.max_notarizations_per_month);
+    println!("  anchoring             : {}", l.entitlements.anchoring);
+    println!("  features              : {:?}", l.entitlements.features);
+    println!("issuer     : {}", signed.issuer.to_hex());
     Ok(())
 }
 

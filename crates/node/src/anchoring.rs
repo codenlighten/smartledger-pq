@@ -90,6 +90,8 @@ mod tests {
             notaryhash_api_key_env: None,
             anchor_key_path: None,
             rpc_addr: None,
+            license_file: None,
+            license_issuer_pubkey: None,
         }
     }
 

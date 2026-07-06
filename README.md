@@ -53,8 +53,11 @@ crates/
             activates by height; new nodes join safely)
   anchor/    checkpoint anchoring; BSV mainnet via           ✅ implemented
             notaryhash.com (feature `notaryhash`) — verified live
+  license/   post-quantum software licenses (SLH-DSA,        ✅ implemented
+            FIPS 205) — offline-verified, enforced by nodes
   node/      TCP gossip, timers, storage, crash-recovery,    ✅ implemented
-            client RPC, daemon + `slc`/`slc-node` CLIs
+            client RPC, daemon + `slc`/`slc-node` CLIs,
+            Docker + AWS one-click deploy (deploy/)
 ```
 
 An idle chain is **silent** — blocks exist only to notarize, so empty blocks are
@@ -129,12 +132,29 @@ mainnet anchoring verified live on-chain. Adversarial coverage includes forged
 hashes, substituted identities, insufficient quorums, outsider signatures,
 crashed proposers, wrong validator sets, and anchor tampering.
 
+## Licensing (post-quantum)
+
+SmartLedger issues **SLH-DSA-signed licenses** (FIPS 205, hash-based). A node
+verifies its license **offline** against SmartLedger's public key and refuses to
+run if it is invalid or expired — no license server, which suits on-prem and
+regulated deployments, and the license itself is quantum-safe.
+
+```sh
+slc license keygen issuer.key                       # SmartLedger's issuing key
+slc license issue --issuer issuer.key --licensee "Acme" --tier enterprise \
+    --expires-days 365 --chain acme --max-nodes 10 --anchoring \
+    --features governance,spv --out license.json
+slc license verify license.json --issuer <pubkey> --chain acme
+# node config: license_file + license_issuer_pubkey  → enforced on startup
+```
+
 ## Cryptography
 
-| Purpose            | Primitive        | Standard   | Quantum posture                    |
-|--------------------|------------------|------------|------------------------------------|
-| Commitments/Merkle | SHA3-256         | FIPS 202   | ~128-bit vs Grover — safe          |
-| Identities/signing | ML-DSA-65        | FIPS 204   | Lattice-based — Shor-resistant     |
+| Purpose            | Primitive          | Standard   | Quantum posture                    |
+|--------------------|--------------------|------------|------------------------------------|
+| Commitments/Merkle | SHA3-256           | FIPS 202   | ~128-bit vs Grover — safe          |
+| Identities/signing | ML-DSA-65          | FIPS 204   | Lattice-based — Shor-resistant     |
+| Licenses (long-term) | SLH-DSA-SHA2-128s | FIPS 205   | Hash-based — most conservative     |
 
 ## License
 

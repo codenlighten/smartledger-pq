@@ -1,13 +1,12 @@
 [package]
-name = "slc-crypto"
+name = "slc-license"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
-fips204.workspace = true
-fips205.workspace = true
-sha3.workspace = true
+slc-crypto.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 hex.workspace = true
 thiserror.workspace = true

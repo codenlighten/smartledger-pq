@@ -5,6 +5,7 @@ members = [
     "crates/ledger",
     "crates/consensus",
     "crates/anchor",
+    "crates/license",
     "crates/node",
 ]
 
@@ -18,6 +19,8 @@ repository = "https://github.com/smartledger/smartledger-chain"
 [workspace.dependencies]
 # Post-quantum: FIPS 204 ML-DSA (Dilithium), pure Rust.
 fips204 = "0.4.6"
+# Post-quantum: FIPS 205 SLH-DSA (SPHINCS+), hash-based — for long-lived licenses.
+fips205 = "0.4.1"
 # Quantum-resistant hashing.
 sha3 = "0.10"
 # Serialization for portable, offline-verifiable proofs.
@@ -31,6 +34,7 @@ slc-crypto = { path = "crates/crypto" }
 slc-ledger = { path = "crates/ledger" }
 slc-consensus = { path = "crates/consensus" }
 slc-anchor = { path = "crates/anchor" }
+slc-license = { path = "crates/license" }
 
 [profile.release]
 lto = true
