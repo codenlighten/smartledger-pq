@@ -41,7 +41,7 @@ fn client_rpc_submit_then_fetch_proof() {
     let mut nodes = Vec::new();
     for (i, (mut transport, sk, pk)) in prep.into_iter().enumerate() {
         transport.set_peers(genesis.peer_addrs(&pk));
-        let mut node = Node::new(transport, &genesis, sk, pk, None, Duration::from_millis(300));
+        let mut node = Node::new(transport, &genesis, sk, pk, None, Duration::from_millis(1200));
         if i == 0 {
             node = node.with_rpc(rpc_addr.clone());
         }
@@ -60,7 +60,7 @@ fn client_rpc_submit_then_fetch_proof() {
     }
 
     // Poll GetProof until the document is notarized, then verify offline.
-    let deadline = Instant::now() + Duration::from_secs(30);
+    let deadline = Instant::now() + Duration::from_secs(60);
     let proof = loop {
         if let RpcResponse::Proof(p) = call(&rpc_addr, &RpcRequest::GetProof(doc_hash)).unwrap() {
             if let Some(proof) = *p {

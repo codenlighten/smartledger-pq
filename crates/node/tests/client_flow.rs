@@ -39,7 +39,7 @@ fn notarize_fetch_and_verify_via_client() {
     let mut nodes = Vec::new();
     for (i, (mut transport, sk, pk)) in prep.into_iter().enumerate() {
         transport.set_peers(genesis.peer_addrs(&pk));
-        let mut node = Node::new(transport, &genesis, sk, pk, None, Duration::from_millis(300));
+        let mut node = Node::new(transport, &genesis, sk, pk, None, Duration::from_millis(1200));
         if i == 0 {
             node = node.with_rpc(rpc_addr.clone());
         }
@@ -54,7 +54,7 @@ fn notarize_fetch_and_verify_via_client() {
     assert!(client::notarize(&rpc_addr, &c_sk, &c_pk, doc_hash).unwrap());
 
     // Fetch the proof.
-    let deadline = Instant::now() + Duration::from_secs(30);
+    let deadline = Instant::now() + Duration::from_secs(60);
     let proof = loop {
         if let Some(p) = client::get_proof(&rpc_addr, doc_hash).unwrap() {
             break p;

@@ -5,6 +5,7 @@
 
 use crate::event::Event;
 use crate::frame::{read_frame, write_frame};
+use crate::meter::Meter;
 use serde::{Deserialize, Serialize};
 use slc_anchor::{AnchorService, AnchoredProof};
 use slc_crypto::{Hash, VerifyingKey};
@@ -14,9 +15,16 @@ use std::net::{TcpListener, TcpStream};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// The optional shared anchoring service the RPC reads to build anchored proofs.
 type SharedAnchor = Option<Arc<Mutex<AnchorService>>>;
+/// The optional shared notarization meter enforcing the licensed volume.
+type SharedMeter = Option<Arc<Mutex<Meter>>>;
+
+fn now_secs() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+}
 
 /// A request from a client.
 ///
@@ -38,6 +46,8 @@ pub enum RpcRequest {
     Status,
     /// This node's identity (chain id + public key) and chain tip.
     NodeInfo,
+    /// Notarization usage against the licensed monthly volume.
+    Usage,
 }
 
 /// A response to a client.
@@ -52,6 +62,7 @@ pub enum RpcResponse {
     AnchoredProof(Box<Option<AnchoredProof>>),
     Status { height: u64, tip: Hash },
     NodeInfo { chain_id: String, pubkey: VerifyingKey, height: u64, tip: Hash },
+    Usage { count: u64, cap: Option<u64>, window_start: u64, window_secs: u64 },
     Error(String),
 }
 
@@ -64,6 +75,7 @@ pub fn serve(
     anchor: SharedAnchor,
     chain_id: String,
     pubkey: VerifyingKey,
+    meter: SharedMeter,
 ) {
     thread::spawn(move || {
         for stream in listener.incoming().flatten() {
@@ -72,11 +84,15 @@ pub fn serve(
             let anchor = anchor.clone();
             let chain_id = chain_id.clone();
             let pubkey = pubkey.clone();
-            thread::spawn(move || handle_conn(stream, ev_tx, committed, anchor, chain_id, pubkey));
+            let meter = meter.clone();
+            thread::spawn(move || {
+                handle_conn(stream, ev_tx, committed, anchor, chain_id, pubkey, meter)
+            });
         }
     });
 }
 
+#[allow(clippy::too_many_arguments)]
 fn handle_conn(
     mut stream: TcpStream,
     ev_tx: Sender<Event>,
@@ -84,13 +100,20 @@ fn handle_conn(
     anchor: SharedAnchor,
     chain_id: String,
     pubkey: VerifyingKey,
+    meter: SharedMeter,
 ) {
     // One connection may carry many requests until the client hangs up.
     while let Ok(req) = read_frame::<_, RpcRequest>(&mut stream) {
         let resp = match req {
             RpcRequest::Submit(att) => {
-                let accepted = att.verify() && ev_tx.send(Event::Submit(att)).is_ok();
-                RpcResponse::Submitted { accepted }
+                if !att.verify() {
+                    RpcResponse::Submitted { accepted: false }
+                } else if !record_usage(&meter) {
+                    RpcResponse::Error("licensed notarization volume exceeded".into())
+                } else {
+                    let accepted = ev_tx.send(Event::Submit(att)).is_ok();
+                    RpcResponse::Submitted { accepted }
+                }
             }
             RpcRequest::SubmitGovernance(change) => {
                 // Authorization is validated by the engine against the current
@@ -123,6 +146,13 @@ fn handle_conn(
                     tip,
                 }
             }
+            RpcRequest::Usage => match &meter {
+                Some(m) => {
+                    let (count, cap, window_start, window_secs) = m.lock().unwrap().status();
+                    RpcResponse::Usage { count, cap, window_start, window_secs }
+                }
+                None => RpcResponse::Usage { count: 0, cap: None, window_start: 0, window_secs: 0 },
+            },
         };
         if write_frame(&mut stream, &resp).is_err() {
             return;
@@ -152,6 +182,15 @@ fn find_anchored_proof(
     let proof = find_proof(committed, hash)?;
     let service = anchor.as_ref()?;
     service.lock().unwrap().anchor_proof(proof)
+}
+
+/// Record one notarization against the meter (if any). Returns whether it is
+/// within the licensed volume; always `true` when unmetered.
+fn record_usage(meter: &SharedMeter) -> bool {
+    match meter {
+        Some(m) => m.lock().unwrap().try_record(now_secs()),
+        None => true,
+    }
 }
 
 /// A blocking client call: connect, send one request, read one response.

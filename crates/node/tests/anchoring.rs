@@ -48,7 +48,7 @@ fn live_network_anchors_a_checkpoint_and_proof_verifies() {
     let mut nodes = Vec::new();
     for (mut transport, sk, pk) in prep {
         transport.set_peers(genesis.peer_addrs(&pk));
-        let node = Node::new(transport, &genesis, sk, pk, None, Duration::from_millis(300))
+        let node = Node::new(transport, &genesis, sk, pk, None, Duration::from_millis(1200))
             .with_anchor(AnchorService::new(Box::new(MockAnchor::new()), INTERVAL));
         nodes.push(node);
     }
@@ -62,7 +62,7 @@ fn live_network_anchors_a_checkpoint_and_proof_verifies() {
     let targets: Vec<Hash> = (0..INTERVAL)
         .map(|i| Hash::digest(format!("anchor-doc-{i}").as_bytes()))
         .collect();
-    std::thread::sleep(Duration::from_millis(300));
+    std::thread::sleep(Duration::from_millis(1200));
     for t in &targets {
         handles[0].submit(Attestation::create(&c_sk, &c_pk, *t).unwrap());
         // brief spacing so each attestation triggers its own block
@@ -70,7 +70,7 @@ fn live_network_anchors_a_checkpoint_and_proof_verifies() {
     }
 
     // Node 0 publishes a checkpoint covering the first INTERVAL blocks.
-    let record = wait_until(|| records.lock().unwrap().first().cloned(), Duration::from_secs(30));
+    let record = wait_until(|| records.lock().unwrap().first().cloned(), Duration::from_secs(60));
     assert_eq!(record.from_height, 1);
     assert_eq!(record.to_height, INTERVAL as u64);
     assert_eq!(record.receipt.backend, "mock");

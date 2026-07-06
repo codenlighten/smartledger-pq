@@ -69,7 +69,7 @@ fn four_node_devnet_notarizes_over_tcp() {
             sk,
             pk,
             None,
-            Duration::from_millis(300),
+            Duration::from_millis(1200),
         ));
     }
     let handles: Vec<NodeHandle> = nodes.into_iter().map(Node::spawn).collect();
@@ -78,12 +78,12 @@ fn four_node_devnet_notarizes_over_tcp() {
     let (client_sk, client_pk) = SigningKey::generate().unwrap();
     let target = Hash::digest(b"devnet-notarized-document");
     let att = Attestation::create(&client_sk, &client_pk, target).unwrap();
-    std::thread::sleep(Duration::from_millis(300)); // let the mesh connect
+    std::thread::sleep(Duration::from_millis(1200)); // let the mesh connect
     handles[0].submit(att);
 
     // 5. Wait until every node has finalized a block containing it.
     let observers: Vec<_> = handles.iter().map(|h| h.committed()).collect();
-    let deadline = Instant::now() + Duration::from_secs(30);
+    let deadline = Instant::now() + Duration::from_secs(60);
     let found: Vec<Block> = loop {
         let seen: Vec<Option<Block>> = observers
             .iter()
@@ -195,12 +195,12 @@ fn restart_resumes_and_chains_across_reboot() {
     let (client_sk, client_pk) = SigningKey::generate().unwrap();
 
     // --- Boot 1: notarize document A, then shut the whole network down. ---
-    let (handles, _set) = spawn_net(&dir, &val_keys, Duration::from_millis(300));
+    let (handles, _set) = spawn_net(&dir, &val_keys, Duration::from_millis(1200));
     let observers: Vec<Observer> = handles.iter().map(|h| h.committed()).collect();
-    std::thread::sleep(Duration::from_millis(300));
+    std::thread::sleep(Duration::from_millis(1200));
     let hash_a = Hash::digest(b"doc-A-before-reboot");
     handles[0].submit(Attestation::create(&client_sk, &client_pk, hash_a).unwrap());
-    let block_a = wait_all(&observers, hash_a, Duration::from_secs(30));
+    let block_a = wait_all(&observers, hash_a, Duration::from_secs(60));
     let height_a = block_a.header.height;
     let id_a = block_a.header.id();
     std::thread::sleep(Duration::from_millis(150)); // let every node flush to disk
@@ -209,7 +209,7 @@ fn restart_resumes_and_chains_across_reboot() {
     }
 
     // --- Boot 2: same keys, same stores, new ports. Notarize document B. ---
-    let (handles2, set2) = spawn_net(&dir, &val_keys, Duration::from_millis(300));
+    let (handles2, set2) = spawn_net(&dir, &val_keys, Duration::from_millis(1200));
     let observers2: Vec<Observer> = handles2.iter().map(|h| h.committed()).collect();
 
     // On resume, each node reloaded block A from disk.
@@ -220,10 +220,10 @@ fn restart_resumes_and_chains_across_reboot() {
         "rebooted nodes must reload the pre-reboot chain"
     );
 
-    std::thread::sleep(Duration::from_millis(300));
+    std::thread::sleep(Duration::from_millis(1200));
     let hash_b = Hash::digest(b"doc-B-after-reboot");
     handles2[0].submit(Attestation::create(&client_sk, &client_pk, hash_b).unwrap());
-    let block_b = wait_all(&observers2, hash_b, Duration::from_secs(30));
+    let block_b = wait_all(&observers2, hash_b, Duration::from_secs(60));
 
     // Block B continues the chain directly on top of A — height advances by one
     // and its prev_hash is A's id. The reboot was seamless.

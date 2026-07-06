@@ -7,6 +7,7 @@ use crate::storage::BlockStore;
 use crate::timers::TimerService;
 use crate::transport::Transport;
 use crate::wire::WireMsg;
+use crate::meter::Meter;
 use slc_anchor::{AnchorRecord, AnchorService};
 use slc_consensus::{Effect, Engine};
 use slc_crypto::{SigningKey, VerifyingKey};
@@ -44,6 +45,8 @@ pub struct Node {
     /// This node's chain id and public identity, for the NodeInfo RPC.
     chain_id: String,
     node_pubkey: VerifyingKey,
+    /// Notarization meter enforcing the licensed monthly volume (if any).
+    meter: Option<Arc<Mutex<Meter>>>,
 }
 
 /// A handle to a spawned node: submit attestations, observe commits, shut down.
@@ -128,12 +131,22 @@ impl Node {
             rpc_addr: None,
             chain_id,
             node_pubkey,
+            meter: None,
         }
     }
 
     /// Enable periodic public-chain anchoring with the given service.
     pub fn with_anchor(mut self, service: AnchorService) -> Node {
         self.anchor = Some(Arc::new(Mutex::new(service)));
+        self
+    }
+
+    /// Enforce a notarization meter (from a license entitlement). `cap` is the
+    /// monthly volume (`None` = unmetered but still counted); `path` persists
+    /// usage across restarts.
+    pub fn with_metering(mut self, cap: Option<u64>, path: Option<std::path::PathBuf>) -> Node {
+        let now = now_unix();
+        self.meter = Some(Arc::new(Mutex::new(Meter::new(cap, path, now))));
         self
     }
 
@@ -160,6 +173,7 @@ impl Node {
                     self.anchor.clone(),
                     self.chain_id.clone(),
                     self.node_pubkey.clone(),
+                    self.meter.clone(),
                 ),
                 Err(e) => eprintln!("could not bind RPC on {addr}: {e}"),
             }

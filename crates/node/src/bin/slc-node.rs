@@ -248,17 +248,20 @@ fn run(config_path: &str) -> ExitCode {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    match slc_node::license::check(&cfg, &cfg.genesis.chain_id, now) {
-        Ok(None) => {}
-        Ok(Some(ent)) => println!(
-            "license   : valid (max_nodes={:?}, anchoring={}, features={:?})",
-            ent.max_nodes, ent.anchoring, ent.features
-        ),
+    let notarization_cap = match slc_node::license::check(&cfg, &cfg.genesis.chain_id, now) {
+        Ok(None) => None,
+        Ok(Some(ent)) => {
+            println!(
+                "license   : valid (max_nodes={:?}, notarizations/mo={:?}, anchoring={}, features={:?})",
+                ent.max_nodes, ent.max_notarizations_per_month, ent.anchoring, ent.features
+            );
+            ent.max_notarizations_per_month
+        }
         Err(e) => {
             eprintln!("license check failed: {e}");
             return ExitCode::FAILURE;
         }
-    }
+    };
 
     let is_validator = cfg.genesis.validators.iter().any(|v| v.pubkey == pk);
 
@@ -356,6 +359,10 @@ fn run(config_path: &str) -> ExitCode {
         println!("rpc       : {rpc}");
         node = node.with_rpc(rpc.clone());
     }
+
+    // Notarization metering (persist usage next to the block store).
+    let meter_path = std::path::PathBuf::from(format!("{}.meter", cfg.block_store_path));
+    node = node.with_metering(notarization_cap, Some(meter_path));
 
     let handle = node.spawn();
 

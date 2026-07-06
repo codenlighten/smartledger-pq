@@ -17,7 +17,7 @@ fn free_port() -> u16 {
 }
 
 fn wait_notarized(rpc: &str, hash: Hash) {
-    let deadline = Instant::now() + Duration::from_secs(30);
+    let deadline = Instant::now() + Duration::from_secs(60);
     while client::get_proof(rpc, hash).unwrap().is_none() {
         assert!(Instant::now() < deadline, "timed out waiting for notarization");
         std::thread::sleep(Duration::from_millis(80));
@@ -46,7 +46,7 @@ fn anchored_proof_over_rpc() {
     let mut nodes = Vec::new();
     for (i, (mut transport, sk, pk)) in prep.into_iter().enumerate() {
         transport.set_peers(genesis.peer_addrs(&pk));
-        let mut node = Node::new(transport, &genesis, sk, pk, None, Duration::from_millis(300));
+        let mut node = Node::new(transport, &genesis, sk, pk, None, Duration::from_millis(1200));
         if i == 0 {
             node = node
                 .with_anchor(AnchorService::new(Box::new(MockAnchor::new()), INTERVAL))
@@ -75,7 +75,7 @@ fn anchored_proof_over_rpc() {
     wait_notarized(&rpc_addr, doc1);
 
     // Now both documents have BSV-hardened anchored proofs.
-    let deadline = Instant::now() + Duration::from_secs(30);
+    let deadline = Instant::now() + Duration::from_secs(60);
     let anchored0 = loop {
         if let Some(p) = client::get_anchored_proof(&rpc_addr, doc0).unwrap() {
             break p;

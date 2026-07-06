@@ -73,6 +73,17 @@ pub fn node_info(node_rpc: &str) -> io::Result<(String, VerifyingKey, u64, Hash)
     }
 }
 
+/// Notarization usage `(count, cap, window_start, window_secs)` for the node.
+pub fn usage(node_rpc: &str) -> io::Result<(u64, Option<u64>, u64, u64)> {
+    match call(node_rpc, &RpcRequest::Usage)? {
+        RpcResponse::Usage { count, cap, window_start, window_secs } => {
+            Ok((count, cap, window_start, window_secs))
+        }
+        RpcResponse::Error(e) => Err(other(e)),
+        _ => Err(other("unexpected response to usage")),
+    }
+}
+
 /// Verify a proof offline against the validator set defined by `genesis`.
 pub fn verify_proof(proof: &NotarizationProof, genesis: &GenesisConfig) -> bool {
     let set = ValidatorSet::bft(genesis.validator_keys());

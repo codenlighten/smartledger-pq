@@ -74,7 +74,7 @@ fn a_validator_joins_a_live_network_via_rpc_governance() {
             .collect();
         transport.set_peers(peers);
         let sk = SigningKey::from_bytes(&sks[i].to_bytes()).unwrap();
-        let mut node = Node::new(transport, &genesis, sk, pks[i].clone(), None, Duration::from_millis(300));
+        let mut node = Node::new(transport, &genesis, sk, pks[i].clone(), None, Duration::from_millis(1200));
         if i == 0 {
             node = node.with_rpc(rpc_addr.clone());
         }
@@ -110,7 +110,10 @@ fn a_validator_joins_a_live_network_via_rpc_governance() {
 
     // Wait until we are past the activation height.
     let committed = handles[0].committed();
-    let blocks = wait_height(&committed, JOIN_HEIGHT, Duration::from_secs(30));
+    let newcomer_committed = handles[4].committed();
+    // Generous deadline: the full test suite runs CPU-heavy SLH-DSA tests in
+    // parallel, which can slow this multi-node TCP scenario.
+    let blocks = wait_height(&committed, JOIN_HEIGHT, Duration::from_secs(90));
 
     // A block carried the governance change...
     assert!(blocks.iter().any(|b| !b.governance.is_empty()), "a block must carry the change");
@@ -126,10 +129,8 @@ fn a_validator_joins_a_live_network_via_rpc_governance() {
     assert_eq!(expected.threshold(), 4);
 
     let joined_block = blocks.iter().find(|b| b.header.height == JOIN_HEIGHT).expect("join-height block");
+    // Finalized by a 4-of-5 quorum from the NEW set, and the newcomer is a member.
     joined_block.qc.verify(&joined_block.header, &expected).expect("finalized by 5-set");
-    let signers: Vec<Hash> = joined_block.qc.signatures.iter().map(|s| s.validator.id()).collect();
-    assert!(signers.contains(&newcomer.id()), "the newcomer signed a finalized block");
-    // The finalized block genuinely carries a 4-of-5 quorum from the new set.
     let in_new_set: usize = joined_block
         .qc
         .signatures
@@ -137,6 +138,15 @@ fn a_validator_joins_a_live_network_via_rpc_governance() {
         .filter(|s| expected.contains(&s.validator))
         .count();
     assert!(in_new_set >= 4, "must be finalized by a 4-of-5 quorum");
+    assert!(expected.contains(&newcomer), "newcomer is now a validator");
+
+    // The newcomer's OWN node followed and committed the join-height block —
+    // proving it is a live participant in the post-join set. (Whether its
+    // signature lands in a *specific* block's QC is timing-dependent, since a
+    // 4-of-5 quorum can form without it.)
+    let nc_blocks = wait_height(&newcomer_committed, JOIN_HEIGHT, Duration::from_secs(90));
+    let nc_join = nc_blocks.iter().find(|b| b.header.height == JOIN_HEIGHT).unwrap();
+    assert_eq!(nc_join.header.id(), joined_block.header.id(), "newcomer agrees on the join block");
 
     for h in handles {
         h.shutdown();

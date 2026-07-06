@@ -35,6 +35,7 @@ fn main() -> ExitCode {
         Some("verify-anchored") => verify_anchored(rest),
         Some("status") => status(rest),
         Some("node-info") => node_info(rest),
+        Some("usage") => usage_cmd(rest),
         _ => return usage(),
     };
     match result {
@@ -58,6 +59,7 @@ fn usage() -> ExitCode {
     eprintln!("  slc verify-anchored <proof.json> <genesis.json>");
     eprintln!("  slc status <node_rpc>");
     eprintln!("  slc node-info <node_rpc>");
+    eprintln!("  slc usage <node_rpc>");
     eprintln!("  slc gov propose --add <pk> [--remove <pk>] --activation <h> [--out f.json]");
     eprintln!("  slc gov approve <change.json> <validator-keystore.json>");
     eprintln!("  slc gov submit <change.json> <node_rpc>");
@@ -441,5 +443,16 @@ fn node_info(a: &[String]) -> R {
     println!("pubkey   : {}", pubkey.to_hex());
     println!("height   : {height}");
     println!("tip      : {tip}");
+    Ok(())
+}
+
+fn usage_cmd(a: &[String]) -> R {
+    let node = a.first().ok_or("usage <node_rpc>")?;
+    let (count, cap, _start, window_secs) = client::usage(node).map_err(|e| e.to_string())?;
+    let days = window_secs / 86400;
+    match cap {
+        Some(c) => println!("notarizations this window ({days}d): {count} / {c}"),
+        None => println!("notarizations this window ({days}d): {count} (unmetered)"),
+    }
     Ok(())
 }

@@ -22,6 +22,7 @@ pub mod client;
 pub mod config;
 pub mod keystore;
 pub mod license;
+pub mod meter;
 pub mod rpc;
 pub mod storage;
 
