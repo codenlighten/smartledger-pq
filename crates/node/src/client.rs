@@ -5,8 +5,8 @@
 use crate::config::GenesisConfig;
 use crate::rpc::{call, RpcRequest, RpcResponse};
 use slc_anchor::AnchoredProof;
-use slc_crypto::{Hash, SigningKey, VerifyingKey};
-use slc_ledger::{Attestation, NotarizationProof, ValidatorSet};
+use slc_crypto::{context, Hash, SigningKey, VerifyingKey};
+use slc_ledger::{Attestation, NotarizationProof, SignedValidatorChange, ValidatorSet};
 use std::io;
 use std::path::Path;
 
@@ -75,4 +75,21 @@ pub fn verify_proof(proof: &NotarizationProof, genesis: &GenesisConfig) -> bool 
 pub fn verify_anchored_proof(proof: &AnchoredProof, genesis: &GenesisConfig) -> bool {
     let set = ValidatorSet::bft(genesis.validator_keys());
     proof.verify(&set).is_ok()
+}
+
+/// Add a validator's approval signature to a proposed change (in place).
+pub fn approve_change(signed: &mut SignedValidatorChange, sk: &SigningKey, pk: &VerifyingKey) {
+    let sig = sk
+        .sign(&signed.change.signing_bytes(), context::GOVERNANCE)
+        .expect("sign governance change");
+    signed.approve(pk.clone(), sig);
+}
+
+/// Submit an authorized validator-set change to a node.
+pub fn submit_governance(node_rpc: &str, signed: &SignedValidatorChange) -> io::Result<bool> {
+    match call(node_rpc, &RpcRequest::SubmitGovernance(signed.clone()))? {
+        RpcResponse::Submitted { accepted } => Ok(accepted),
+        RpcResponse::Error(e) => Err(io::Error::other(e)),
+        _ => Err(io::Error::other("unexpected response to submit-governance")),
+    }
 }

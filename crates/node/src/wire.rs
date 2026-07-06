@@ -4,7 +4,7 @@
 
 use serde::{Deserialize, Serialize};
 use slc_consensus::ConsensusMsg;
-use slc_ledger::Attestation;
+use slc_ledger::{Attestation, SignedValidatorChange};
 
 /// Everything that travels between nodes.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -13,4 +13,6 @@ pub enum WireMsg {
     Consensus(ConsensusMsg),
     /// A client attestation being gossiped toward whoever proposes next.
     Attestation(Attestation),
+    /// A validator-set change being gossiped toward whoever proposes next.
+    Governance(SignedValidatorChange),
 }

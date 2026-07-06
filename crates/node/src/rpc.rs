@@ -8,7 +8,7 @@ use crate::frame::{read_frame, write_frame};
 use serde::{Deserialize, Serialize};
 use slc_anchor::{AnchorService, AnchoredProof};
 use slc_crypto::Hash;
-use slc_ledger::{Attestation, Block, NotarizationProof};
+use slc_ledger::{Attestation, Block, NotarizationProof, SignedValidatorChange};
 use std::io;
 use std::net::{TcpListener, TcpStream};
 use std::sync::mpsc::Sender;
@@ -28,6 +28,8 @@ type SharedAnchor = Option<Arc<Mutex<AnchorService>>>;
 pub enum RpcRequest {
     /// Submit an attestation to be notarized.
     Submit(Attestation),
+    /// Submit a quorum-authorized validator-set change (operator action).
+    SubmitGovernance(SignedValidatorChange),
     /// Fetch a notarization proof for a notarized document hash, if it exists.
     GetProof(Hash),
     /// Fetch a BSV-hardened anchored proof, if the block has been anchored.
@@ -74,6 +76,12 @@ fn handle_conn(
         let resp = match req {
             RpcRequest::Submit(att) => {
                 let accepted = att.verify() && ev_tx.send(Event::Submit(att)).is_ok();
+                RpcResponse::Submitted { accepted }
+            }
+            RpcRequest::SubmitGovernance(change) => {
+                // Authorization is validated by the engine against the current
+                // set; here we only forward it into the loop.
+                let accepted = ev_tx.send(Event::SubmitGovernance(change)).is_ok();
                 RpcResponse::Submitted { accepted }
             }
             RpcRequest::GetProof(hash) => RpcResponse::Proof(Box::new(find_proof(&committed, hash))),

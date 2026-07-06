@@ -51,6 +51,11 @@ impl BlockStore {
         self.blocks.clone()
     }
 
+    /// A point-in-time copy of all stored blocks (e.g. to replay governance).
+    pub fn snapshot(&self) -> Vec<Block> {
+        self.blocks.lock().unwrap().clone()
+    }
+
     /// The current chain tip `(block_id, height)`, or `(zero, 0)` if empty.
     pub fn tip(&self) -> (Hash, u64) {
         self.blocks

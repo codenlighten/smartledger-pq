@@ -10,7 +10,7 @@ use crate::wire::WireMsg;
 use slc_anchor::{AnchorRecord, AnchorService};
 use slc_consensus::{Effect, Engine};
 use slc_crypto::{SigningKey, VerifyingKey};
-use slc_ledger::{Attestation, Block, ValidatorSet};
+use slc_ledger::{Attestation, Block, ValidatorRegistry};
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::mpsc::{channel, Receiver, Sender};
@@ -90,13 +90,21 @@ impl Node {
         store_path: Option<&Path>,
         base_timeout: Duration,
     ) -> Node {
-        let set = ValidatorSet::bft(genesis.validator_keys());
         // Resume from disk: if we have finalized blocks, continue the chain from
         // the stored tip rather than restarting at genesis. A fresh store yields
         // (zero, 0) → start at height 1 on top of the implicit genesis.
         let store = BlockStore::open(store_path);
         let (tip, last_height) = store.tip();
-        let engine = Engine::new(set, me_sk, me_pk, tip, last_height + 1);
+        // Rebuild the validator registry from genesis plus every governance
+        // change recorded on-chain, so a rebooted node derives the current
+        // validator set straight from its stored blocks — no config drift.
+        let mut registry = ValidatorRegistry::new(genesis.validator_keys());
+        for block in store.snapshot() {
+            for change in &block.governance {
+                registry.record(change.change.clone());
+            }
+        }
+        let engine = Engine::with_registry(registry, me_sk, me_pk, tip, last_height + 1);
         let (ev_tx, ev_rx) = channel();
         transport
             .start_accept(ev_tx.clone())
@@ -166,12 +174,17 @@ impl Node {
             let effects = match event {
                 Event::Wire(WireMsg::Consensus(msg)) => self.engine.on_message(msg),
                 Event::Wire(WireMsg::Attestation(att)) => self.engine.add_attestation(att),
+                Event::Wire(WireMsg::Governance(change)) => self.engine.add_governance(change).1,
                 Event::Timeout(h, r, kind) => self.engine.on_timeout(h, r, kind),
                 Event::Submit(att) => {
                     // Gossip to peers so the next proposer can include it, then
                     // queue it locally (which may wake an idle proposer).
                     self.transport.broadcast(&WireMsg::Attestation(att.clone()));
                     self.engine.add_attestation(att)
+                }
+                Event::SubmitGovernance(change) => {
+                    self.transport.broadcast(&WireMsg::Governance(change.clone()));
+                    self.engine.add_governance(change).1
                 }
                 Event::Shutdown => {
                     self.timers.stop();
