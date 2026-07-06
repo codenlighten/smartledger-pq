@@ -44,6 +44,20 @@ impl Transport {
         self.peers = peers;
     }
 
+    /// Add a peer at runtime (idempotent). Lets an operator mesh a newly-joined
+    /// node into a running network without a restart. Connection is lazy.
+    pub fn add_peer(&mut self, addr: String) {
+        if !self.peers.contains(&addr) {
+            self.peers.push(addr);
+            self.outbound.push(None);
+        }
+    }
+
+    /// The current peer list.
+    pub fn peers(&self) -> &[String] {
+        &self.peers
+    }
+
     /// Spawn the accept loop; each inbound connection gets a reader thread that
     /// forwards decoded messages as [`Event::Wire`].
     pub fn start_accept(&self, tx: Sender<Event>) -> io::Result<()> {

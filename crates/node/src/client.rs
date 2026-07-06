@@ -113,3 +113,12 @@ pub fn submit_governance(node_rpc: &str, signed: &SignedValidatorChange) -> io::
         _ => Err(io::Error::other("unexpected response to submit-governance")),
     }
 }
+
+/// Add a peer address to a running node.
+pub fn add_peer(node_rpc: &str, addr: &str) -> io::Result<bool> {
+    match call(node_rpc, &RpcRequest::AddPeer(addr.to_string()))? {
+        RpcResponse::Submitted { accepted } => Ok(accepted),
+        RpcResponse::Error(e) => Err(io::Error::other(e)),
+        _ => Err(io::Error::other("unexpected response to add-peer")),
+    }
+}

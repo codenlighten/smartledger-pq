@@ -81,7 +81,19 @@ slc gov approve change.json <validator-keystore>     # repeated by ≥ quorum va
 slc gov submit  change.json <any-node-rpc>
 ```
 
-The change rides into a block; at `activation_height` every node — derived from
-the chain, not config — switches to the new set, and the newcomer starts signing
-blocks. (The newcomer's advertised address must also be reachable by existing
-validators; add it to their `SLC_PEERS` / genesis peer list.)
+Existing validators also need to reach the newcomer over p2p. Add its address to
+each running node **without a restart**:
+
+```sh
+slc add-peer <newcomer-ip>:9000 <existing-node-rpc>   # repeat per validator
+```
+
+Then the change rides into a block; at `activation_height` every node — derived
+from the chain, not config — switches to the new set, and the newcomer starts
+signing blocks. Nodes periodically **re-gossip** their current-round messages, so
+a newly-added peer (or a healed network partition) catches up and consensus
+resumes on its own.
+
+> Note: a node must be connected from genesis to have the full block history
+> (there is no block-sync/catch-up protocol yet), so run joining nodes as
+> followers from the start and admit them later via governance.

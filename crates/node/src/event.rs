@@ -15,6 +15,10 @@ pub enum Event {
     Submit(Attestation),
     /// A local operator submitted an authorized validator-set change.
     SubmitGovernance(SignedValidatorChange),
+    /// A local operator added a peer at runtime.
+    AddPeer(String),
+    /// Periodic tick to re-gossip current-round messages (partition recovery).
+    Regossip,
     /// Stop the loop.
     Shutdown,
 }

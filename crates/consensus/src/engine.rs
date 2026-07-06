@@ -240,6 +240,31 @@ impl Engine {
         self.parked
     }
 
+    /// Re-broadcast this node's current-round messages (its proposal if it is
+    /// the proposer, plus its prevote and precommit). Called periodically so
+    /// that peers which were unreachable when a message was first sent — a
+    /// healed partition, a newly-added peer — still receive it and consensus
+    /// can make progress. Idle (parked) engines re-gossip nothing.
+    pub fn regossip(&self) -> Vec<Effect> {
+        let mut out = Vec::new();
+        if self.parked {
+            return out;
+        }
+        if let Some(pm) = self.proposals.get(&self.round) {
+            if pm.proposer == self.me_pk {
+                out.push(Effect::Broadcast(ConsensusMsg::Proposal(pm.clone())));
+            }
+        }
+        let me = self.me_pk.id();
+        if let Some(vm) = self.prevotes.get(&self.round).and_then(|m| m.get(&me)) {
+            out.push(Effect::Broadcast(ConsensusMsg::Vote(vm.clone())));
+        }
+        if let Some(vm) = self.precommits.get(&self.round).and_then(|m| m.get(&me)) {
+            out.push(Effect::Broadcast(ConsensusMsg::Vote(vm.clone())));
+        }
+        out
+    }
+
     /// Begin consensus at the starting height (round 0).
     pub fn start(&mut self) -> Vec<Effect> {
         let mut out = Vec::new();

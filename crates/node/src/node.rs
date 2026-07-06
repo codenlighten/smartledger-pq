@@ -179,6 +179,17 @@ impl Node {
             }
         }
 
+        // Periodic re-gossip so peers unreachable when a message was first sent
+        // (a healed partition, a newly-added peer) still receive it.
+        let gossip_tx = ev_tx.clone();
+        let gossip_interval = self.base_timeout;
+        thread::spawn(move || loop {
+            thread::sleep(gossip_interval);
+            if gossip_tx.send(crate::event::Event::Regossip).is_err() {
+                break;
+            }
+        });
+
         let join = thread::spawn(move || self.run());
         NodeHandle {
             ev_tx,
@@ -212,6 +223,12 @@ impl Node {
                     self.transport.broadcast(&WireMsg::Governance(change.clone()));
                     self.engine.add_governance(change).1
                 }
+                Event::AddPeer(addr) => {
+                    println!("added peer: {addr}");
+                    self.transport.add_peer(addr);
+                    Vec::new()
+                }
+                Event::Regossip => self.engine.regossip(),
                 Event::Shutdown => {
                     self.timers.stop();
                     break;

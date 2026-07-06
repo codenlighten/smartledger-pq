@@ -38,6 +38,8 @@ pub enum RpcRequest {
     Submit(Attestation),
     /// Submit a quorum-authorized validator-set change (operator action).
     SubmitGovernance(SignedValidatorChange),
+    /// Add a peer address at runtime (operator action).
+    AddPeer(String),
     /// Fetch a notarization proof for a notarized document hash, if it exists.
     GetProof(Hash),
     /// Fetch a BSV-hardened anchored proof, if the block has been anchored.
@@ -119,6 +121,10 @@ fn handle_conn(
                 // Authorization is validated by the engine against the current
                 // set; here we only forward it into the loop.
                 let accepted = ev_tx.send(Event::SubmitGovernance(change)).is_ok();
+                RpcResponse::Submitted { accepted }
+            }
+            RpcRequest::AddPeer(addr) => {
+                let accepted = ev_tx.send(Event::AddPeer(addr)).is_ok();
                 RpcResponse::Submitted { accepted }
             }
             RpcRequest::GetProof(hash) => RpcResponse::Proof(Box::new(find_proof(&committed, hash))),

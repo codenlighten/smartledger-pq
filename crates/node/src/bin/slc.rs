@@ -36,6 +36,7 @@ fn main() -> ExitCode {
         Some("status") => status(rest),
         Some("node-info") => node_info(rest),
         Some("usage") => usage_cmd(rest),
+        Some("add-peer") => add_peer(rest),
         _ => return usage(),
     };
     match result {
@@ -60,6 +61,7 @@ fn usage() -> ExitCode {
     eprintln!("  slc status <node_rpc>");
     eprintln!("  slc node-info <node_rpc>");
     eprintln!("  slc usage <node_rpc>");
+    eprintln!("  slc add-peer <peer_addr> <node_rpc>");
     eprintln!("  slc gov propose --add <pk> [--remove <pk>] --activation <h> [--out f.json]");
     eprintln!("  slc gov approve <change.json> <validator-keystore.json>");
     eprintln!("  slc gov submit <change.json> <node_rpc>");
@@ -444,6 +446,17 @@ fn node_info(a: &[String]) -> R {
     println!("height   : {height}");
     println!("tip      : {tip}");
     Ok(())
+}
+
+fn add_peer(a: &[String]) -> R {
+    let addr = a.first().ok_or("add-peer <peer_addr> <node_rpc>")?;
+    let node = a.get(1).ok_or("missing <node_rpc>")?;
+    if client::add_peer(node, addr).map_err(|e| e.to_string())? {
+        println!("added peer {addr} to {node}");
+        Ok(())
+    } else {
+        Err("node did not accept the peer".into())
+    }
 }
 
 fn usage_cmd(a: &[String]) -> R {
