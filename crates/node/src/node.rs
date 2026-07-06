@@ -8,7 +8,7 @@ use crate::timers::TimerService;
 use crate::transport::Transport;
 use crate::wire::WireMsg;
 use slc_consensus::{Effect, Engine};
-use slc_crypto::{Hash, SigningKey, VerifyingKey};
+use slc_crypto::{SigningKey, VerifyingKey};
 use slc_ledger::{Attestation, Block, ValidatorSet};
 use std::net::SocketAddr;
 use std::path::Path;
@@ -77,13 +77,17 @@ impl Node {
         base_timeout: Duration,
     ) -> Node {
         let set = ValidatorSet::bft(genesis.validator_keys());
-        let engine = Engine::new(set, me_sk, me_pk, Hash::zero(), 1);
+        // Resume from disk: if we have finalized blocks, continue the chain from
+        // the stored tip rather than restarting at genesis. A fresh store yields
+        // (zero, 0) → start at height 1 on top of the implicit genesis.
+        let store = BlockStore::open(store_path);
+        let (tip, last_height) = store.tip();
+        let engine = Engine::new(set, me_sk, me_pk, tip, last_height + 1);
         let (ev_tx, ev_rx) = channel();
         transport
             .start_accept(ev_tx.clone())
             .expect("start accept loop");
         let timers = TimerService::start(ev_tx.clone());
-        let store = BlockStore::open(store_path);
         Node {
             engine,
             transport,
