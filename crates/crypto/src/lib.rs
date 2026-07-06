@@ -41,4 +41,6 @@ pub mod context {
     pub const PROPOSAL: &[u8] = b"SLC-proposal-v1";
     /// A validator signing a prevote or a nil vote (never counts toward a QC).
     pub const VOTE: &[u8] = b"SLC-vote-v1";
+    /// A validator approving a change to the validator set (governance).
+    pub const GOVERNANCE: &[u8] = b"SLC-governance-v1";
 }

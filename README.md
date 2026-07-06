@@ -48,7 +48,9 @@ crates/
   ledger/   attestations, Merkle proofs, blocks, quorum     ✅ implemented
             certificates, portable notarization proofs
   consensus/ Quorum-Certified Notary BFT + view change,     ✅ implemented
-            attestation-triggered (no empty blocks)
+            attestation-triggered (no empty blocks),
+            validator-set governance (quorum-approved,
+            activates by height; new nodes join safely)
   anchor/    checkpoint anchoring; BSV mainnet via           ✅ implemented
             notaryhash.com (feature `notaryhash`) — verified live
   node/      TCP gossip, timers, storage, crash-recovery,    ✅ implemented
@@ -58,6 +60,15 @@ crates/
 An idle chain is **silent** — blocks exist only to notarize, so empty blocks are
 structurally impossible (a valid block always has ≥1 attestation, and the engine
 idles until there is something to notarize).
+
+**Validator-set governance.** The roster grows as legally-known clients join. A
+change (add/remove validators) is authorized by a **quorum of the current
+validators** — no privileged admin key — and carries an `activation_height`, so
+every node switches to the new set at the same height. The set in force at any
+height is a pure function of the genesis roster plus activated changes, and each
+block's quorum certificate is checked against the set for *its* height. A joining
+5th validator flips the quorum from 3-of-4 to 4-of-5 exactly at activation, with
+consensus uninterrupted (`crates/consensus/tests/governance.rs`).
 
 ## Try it
 

@@ -12,6 +12,7 @@
 //! This crate is pure and deterministic: no networking, no clock, no storage.
 //! Consensus and the node daemon build on top of it.
 
+pub mod governance;
 pub mod merkle;
 
 mod attestation;
@@ -21,6 +22,7 @@ mod validators;
 
 pub use attestation::Attestation;
 pub use block::{Block, BlockHeader, QuorumCertificate, ValidatorSig};
+pub use governance::{SignedValidatorChange, ValidatorChange, ValidatorRegistry};
 pub use merkle::{MerklePath, MerkleStep, MerkleTree};
 pub use proof::NotarizationProof;
 pub use validators::ValidatorSet;

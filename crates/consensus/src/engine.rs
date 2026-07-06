@@ -14,7 +14,10 @@
 
 use crate::messages::{ConsensusMsg, Proposed, ProposalMsg, VoteMsg, VoteType};
 use slc_crypto::{Hash, SigningKey, VerifyingKey};
-use slc_ledger::{Attestation, Block, BlockHeader, MerkleTree, QuorumCertificate, ValidatorSet};
+use slc_ledger::{
+    Attestation, Block, BlockHeader, MerkleTree, QuorumCertificate, ValidatorChange,
+    ValidatorRegistry, ValidatorSet,
+};
 use std::collections::{HashMap, HashSet};
 
 /// Maximum attestations packed into one block.
@@ -74,7 +77,11 @@ fn matches(block_id: Option<Hash>, want: Match) -> bool {
 
 /// A single validator's consensus state machine.
 pub struct Engine {
-    set: ValidatorSet,
+    /// The evolving roster; the active set is a function of height.
+    registry: ValidatorRegistry,
+    /// The validator set in force at the current height (cached).
+    current_set: ValidatorSet,
+    /// `current_set`'s members sorted by id, for deterministic proposer choice.
     validators_sorted: Vec<VerifyingKey>,
     me_sk: SigningKey,
     me_pk: VerifyingKey,
@@ -119,10 +126,25 @@ impl Engine {
         tip: Hash,
         start_height: u64,
     ) -> Engine {
-        let mut validators_sorted = set.validators().to_vec();
+        let registry = ValidatorRegistry::new(set.validators().to_vec());
+        Engine::with_registry(registry, me_sk, me_pk, tip, start_height)
+    }
+
+    /// Create an engine backed by a [`ValidatorRegistry`], so the validator set
+    /// can change by height via governance.
+    pub fn with_registry(
+        registry: ValidatorRegistry,
+        me_sk: SigningKey,
+        me_pk: VerifyingKey,
+        tip: Hash,
+        start_height: u64,
+    ) -> Engine {
+        let current_set = registry.active_set(start_height);
+        let mut validators_sorted = current_set.validators().to_vec();
         validators_sorted.sort_by_key(|v| v.id());
         Engine {
-            set,
+            registry,
+            current_set,
             validators_sorted,
             me_sk,
             me_pk,
@@ -154,6 +176,19 @@ impl Engine {
     pub fn round(&self) -> u64 {
         self.round
     }
+    /// The validator set currently in force (at the engine's height).
+    pub fn validator_set(&self) -> &ValidatorSet {
+        &self.current_set
+    }
+
+    /// Record a finalized, authorized validator-set change. It applies at its
+    /// `activation_height`; every node that records the identical change stays
+    /// in agreement on who the validators are at each height.
+    pub fn record_validator_change(&mut self, change: ValidatorChange) {
+        self.registry.record(change);
+        self.reload_set();
+    }
+
     pub fn tip(&self) -> Hash {
         self.tip
     }
@@ -240,7 +275,16 @@ impl Engine {
         self.validators_sorted.len()
     }
     fn quorum(&self) -> usize {
-        self.set.threshold()
+        self.current_set.threshold()
+    }
+
+    /// Recompute the active validator set for the current height. Called when
+    /// the height advances, so governance changes take effect at their
+    /// activation height on every node identically.
+    fn reload_set(&mut self) {
+        self.current_set = self.registry.active_set(self.height);
+        self.validators_sorted = self.current_set.validators().to_vec();
+        self.validators_sorted.sort_by_key(|v| v.id());
     }
     fn f(&self) -> usize {
         self.n() - self.quorum()
@@ -383,7 +427,7 @@ impl Engine {
     }
 
     fn ingest_vote(&mut self, vm: VoteMsg) {
-        if vm.height != self.height || !self.set.contains(&vm.voter) || !vm.verify_sig() {
+        if vm.height != self.height || !self.current_set.contains(&vm.voter) || !vm.verify_sig() {
             return;
         }
         let store = match vm.vote_type {
@@ -602,6 +646,8 @@ impl Engine {
         // Roll forward to the next height with fully reset per-height state.
         self.height += 1;
         self.tip = id;
+        // The validator set may change at this new height (governance activation).
+        self.reload_set();
         self.round = 0;
         self.step = Step::Propose;
         self.locked_value = None;
