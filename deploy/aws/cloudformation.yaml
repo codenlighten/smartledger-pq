@@ -1,0 +1,132 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  SmartLedger-Chain node — one-click deploy. Launches an EC2 instance that runs
+  a post-quantum notary-chain validator/follower node in Docker. Provide a
+  genesis URL to join an existing chain, or leave it blank to bootstrap a new
+  single-validator chain. A node not yet in the validator set runs as a follower
+  until the consortium admits it via governance (`slc gov`).
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label: { default: "Node image & size" }
+        Parameters: [DockerImage, InstanceType, KeyName, DataVolumeGiB]
+      - Label: { default: "Chain" }
+        Parameters: [ChainId, GenesisUrl]
+      - Label: { default: "BSV anchoring (optional)" }
+        Parameters: [AnchorInterval, AnchorBackend, NotaryHashEndpoint, NotaryHashApiKey]
+      - Label: { default: "Network access (CIDRs)" }
+        Parameters: [SshCidr, P2pCidr, RpcCidr]
+
+Parameters:
+  DockerImage:
+    Type: String
+    Default: ghcr.io/smartledger/smartledger-chain:latest
+    Description: Published node image to run.
+  InstanceType:
+    Type: String
+    Default: t3.small
+    AllowedValues: [t3.micro, t3.small, t3.medium, t3.large, m6i.large]
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: Existing EC2 key pair for SSH access.
+  DataVolumeGiB:
+    Type: Number
+    Default: 20
+    MinValue: 8
+    Description: Root volume size (holds keys + block store).
+  ChainId:
+    Type: String
+    Default: smartledger
+  GenesisUrl:
+    Type: String
+    Default: ""
+    Description: URL to a shared genesis.json to join an existing chain. Blank = bootstrap a new single-validator chain.
+  AnchorInterval:
+    Type: Number
+    Default: 0
+    Description: Anchor a BSV checkpoint every N blocks (0 = disabled).
+  AnchorBackend:
+    Type: String
+    Default: ""
+    AllowedValues: ["", mock, file, notaryhash]
+  NotaryHashEndpoint:
+    Type: String
+    Default: https://notaryhash.com
+  NotaryHashApiKey:
+    Type: String
+    Default: ""
+    NoEcho: true
+    Description: API key for the notaryhash BSV anchor backend (if used).
+  SshCidr:
+    Type: String
+    Default: 0.0.0.0/0
+    Description: CIDR allowed to SSH (port 22). Restrict this in production.
+  P2pCidr:
+    Type: String
+    Default: 0.0.0.0/0
+    Description: CIDR allowed to reach p2p (port 9000) — the other validators.
+  RpcCidr:
+    Type: String
+    Default: 0.0.0.0/0
+    Description: CIDR allowed to reach the client RPC (port 7000). Restrict this.
+
+Resources:
+  NodeSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: SmartLedger-Chain node access
+      SecurityGroupIngress:
+        - { IpProtocol: tcp, FromPort: 22, ToPort: 22, CidrIp: !Ref SshCidr, Description: SSH }
+        - { IpProtocol: tcp, FromPort: 9000, ToPort: 9000, CidrIp: !Ref P2pCidr, Description: p2p }
+        - { IpProtocol: tcp, FromPort: 7000, ToPort: 7000, CidrIp: !Ref RpcCidr, Description: client RPC }
+
+  NodeInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyName
+      ImageId: "{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64}}"
+      SecurityGroupIds: [!Ref NodeSecurityGroup]
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs: { VolumeSize: !Ref DataVolumeGiB, VolumeType: gp3, DeleteOnTermination: true }
+      Tags:
+        - { Key: Name, Value: !Sub "smartledger-node-${ChainId}" }
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -euxo pipefail
+          dnf install -y docker
+          systemctl enable --now docker
+          mkdir -p /var/lib/slc
+          TOKEN=$(curl -sX PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 300")
+          PUBIP=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/public-ipv4)
+          docker pull "${DockerImage}"
+          docker run -d --name slc --restart unless-stopped \
+            -p 9000:9000 -p 7000:7000 \
+            -v /var/lib/slc:/data \
+            -e SLC_CHAIN_ID="${ChainId}" \
+            -e SLC_PUBLIC_ADDR="${!PUBIP}:9000" \
+            -e SLC_GENESIS_URL="${GenesisUrl}" \
+            -e SLC_ANCHOR_INTERVAL="${AnchorInterval}" \
+            -e SLC_ANCHOR_BACKEND="${AnchorBackend}" \
+            -e SLC_NOTARYHASH_ENDPOINT="${NotaryHashEndpoint}" \
+            -e SLC_NOTARYHASH_API_KEY_ENV="NOTARYHASH_API_KEY" \
+            -e NOTARYHASH_API_KEY="${NotaryHashApiKey}" \
+            "${DockerImage}"
+
+Outputs:
+  InstanceId:
+    Value: !Ref NodeInstance
+  P2PEndpoint:
+    Description: Advertise this to the consortium (add to genesis/peers).
+    Value: !Sub "${NodeInstance.PublicIp}:9000"
+  RpcEndpoint:
+    Description: Client RPC endpoint for notarize / get-proof / verify.
+    Value: !Sub "${NodeInstance.PublicIp}:7000"
+  NodePublicKey:
+    Description: Retrieve this node's post-quantum public key (share it for governance admission).
+    Value: !Sub "slc node-info ${NodeInstance.PublicIp}:7000"
+  SshCommand:
+    Value: !Sub "ssh ec2-user@${NodeInstance.PublicIp}"

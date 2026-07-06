@@ -6,3 +6,6 @@ Cargo.lock.orig
 *.sk
 *.key
 keystore/
+
+# Generated local devnet (keystores, configs, block stores)
+/deploy/devnet/

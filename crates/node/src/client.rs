@@ -64,6 +64,15 @@ pub fn status(node_rpc: &str) -> io::Result<(u64, Hash)> {
     }
 }
 
+/// A node's identity: chain id, public key, height, tip.
+pub fn node_info(node_rpc: &str) -> io::Result<(String, VerifyingKey, u64, Hash)> {
+    match call(node_rpc, &RpcRequest::NodeInfo)? {
+        RpcResponse::NodeInfo { chain_id, pubkey, height, tip } => Ok((chain_id, pubkey, height, tip)),
+        RpcResponse::Error(e) => Err(other(e)),
+        _ => Err(other("unexpected response to node-info")),
+    }
+}
+
 /// Verify a proof offline against the validator set defined by `genesis`.
 pub fn verify_proof(proof: &NotarizationProof, genesis: &GenesisConfig) -> bool {
     let set = ValidatorSet::bft(genesis.validator_keys());

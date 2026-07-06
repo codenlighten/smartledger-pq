@@ -41,6 +41,9 @@ pub struct Node {
     anchor_records: Arc<Mutex<Vec<AnchorRecord>>>,
     /// Client-facing RPC listen address, when enabled.
     rpc_addr: Option<String>,
+    /// This node's chain id and public identity, for the NodeInfo RPC.
+    chain_id: String,
+    node_pubkey: VerifyingKey,
 }
 
 /// A handle to a spawned node: submit attestations, observe commits, shut down.
@@ -104,6 +107,8 @@ impl Node {
                 registry.record(change.change.clone());
             }
         }
+        let chain_id = genesis.chain_id.clone();
+        let node_pubkey = me_pk.clone();
         let engine = Engine::with_registry(registry, me_sk, me_pk, tip, last_height + 1);
         let (ev_tx, ev_rx) = channel();
         transport
@@ -121,6 +126,8 @@ impl Node {
             anchor: None,
             anchor_records: Arc::new(Mutex::new(Vec::new())),
             rpc_addr: None,
+            chain_id,
+            node_pubkey,
         }
     }
 
@@ -146,9 +153,14 @@ impl Node {
         // Start the client RPC before the loop moves onto its thread.
         if let Some(addr) = &self.rpc_addr {
             match std::net::TcpListener::bind(addr) {
-                Ok(listener) => {
-                    crate::rpc::serve(listener, ev_tx.clone(), committed.clone(), self.anchor.clone())
-                }
+                Ok(listener) => crate::rpc::serve(
+                    listener,
+                    ev_tx.clone(),
+                    committed.clone(),
+                    self.anchor.clone(),
+                    self.chain_id.clone(),
+                    self.node_pubkey.clone(),
+                ),
                 Err(e) => eprintln!("could not bind RPC on {addr}: {e}"),
             }
         }

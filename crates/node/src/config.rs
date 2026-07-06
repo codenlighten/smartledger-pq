@@ -49,6 +49,15 @@ pub struct NodeConfig {
     /// Base consensus timeout in milliseconds (grows linearly with round).
     #[serde(default = "default_timeout_ms")]
     pub base_timeout_ms: u64,
+    /// The socket to bind for p2p (e.g. `0.0.0.0:9000`). If unset, the node's
+    /// advertised address from the genesis roster is used. Set this explicitly
+    /// in containers/cloud, where the bind address differs from the public one.
+    #[serde(default)]
+    pub listen: Option<String>,
+    /// Explicit peer addresses to gossip with. If unset, derived from the
+    /// genesis roster (every validator but this one).
+    #[serde(default)]
+    pub peers: Option<Vec<String>>,
     /// Publish a public-chain checkpoint every N finalized blocks. `0` disables
     /// anchoring.
     #[serde(default)]

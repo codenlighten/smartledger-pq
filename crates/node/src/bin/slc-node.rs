@@ -24,10 +24,75 @@ fn main() -> ExitCode {
             None => usage(),
         },
         Some("init-devnet") => match args.get(2) {
-            Some(dir) => init_devnet(dir, args.get(3).and_then(|s| s.parse().ok()).unwrap_or(4)),
+            Some(dir) => {
+                let n = args.iter().skip(3).find_map(|a| a.parse::<usize>().ok()).unwrap_or(4);
+                let docker = args.iter().any(|a| a == "--docker");
+                init_devnet(dir, n, docker)
+            }
+            None => usage(),
+        },
+        Some("render-config") => match args.get(2) {
+            Some(out) => render_config(out),
             None => usage(),
         },
         _ => usage(),
+    }
+}
+
+/// Build a node config JSON from environment variables (for containers/cloud).
+/// Reads a genesis file at $SLC_GENESIS_FILE and emits a config to `out`.
+fn render_config(out: &str) -> ExitCode {
+    let env = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
+
+    let genesis_file = match env("SLC_GENESIS_FILE") {
+        Some(f) => f,
+        None => {
+            eprintln!("SLC_GENESIS_FILE is required");
+            return ExitCode::FAILURE;
+        }
+    };
+    let genesis: GenesisConfig = match std::fs::read_to_string(&genesis_file)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+    {
+        Some(g) => g,
+        None => {
+            eprintln!("could not read/parse genesis at {genesis_file}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let cfg = NodeConfig {
+        genesis,
+        key_path: env("SLC_KEYSTORE").unwrap_or_else(|| "/data/node.key".into()),
+        block_store_path: env("SLC_STORE").unwrap_or_else(|| "/data/blocks".into()),
+        base_timeout_ms: env("SLC_BASE_TIMEOUT_MS").and_then(|v| v.parse().ok()).unwrap_or(1000),
+        listen: env("SLC_LISTEN").or_else(|| Some("0.0.0.0:9000".into())),
+        peers: env("SLC_PEERS").map(|s| s.split(',').map(|p| p.trim().to_string()).collect()),
+        anchor_interval: env("SLC_ANCHOR_INTERVAL").and_then(|v| v.parse().ok()).unwrap_or(0),
+        anchor_backend: env("SLC_ANCHOR_BACKEND"),
+        anchor_file: env("SLC_ANCHOR_FILE"),
+        notaryhash_endpoint: env("SLC_NOTARYHASH_ENDPOINT"),
+        notaryhash_api_key_env: env("SLC_NOTARYHASH_API_KEY_ENV"),
+        anchor_key_path: env("SLC_ANCHOR_KEY_PATH"),
+        rpc_addr: env("SLC_RPC").or_else(|| Some("0.0.0.0:7000".into())),
+    };
+
+    match serde_json::to_string_pretty(&cfg) {
+        Ok(json) => match std::fs::write(out, json) {
+            Ok(()) => {
+                println!("wrote config: {out}");
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("write failed: {e}");
+                ExitCode::FAILURE
+            }
+        },
+        Err(e) => {
+            eprintln!("serialize failed: {e}");
+            ExitCode::FAILURE
+        }
     }
 }
 
@@ -36,19 +101,22 @@ fn usage() -> ExitCode {
     eprintln!("  slc-node keygen <keystore.json>");
     eprintln!("  slc-node run <config.json>");
     eprintln!("  slc-node init-devnet <dir> [num_nodes=4]");
+    eprintln!("  slc-node render-config <out.json>   (from SLC_* env vars)");
     ExitCode::FAILURE
 }
 
 /// Generate keystores, a shared genesis, and per-node configs for a local
-/// N-validator devnet under `dir`.
-fn init_devnet(dir: &str, n: usize) -> ExitCode {
+/// N-validator devnet under `dir`. With `docker`, use container-friendly
+/// service-name addressing and `/data` paths for docker-compose.
+fn init_devnet(dir: &str, n: usize, docker: bool) -> ExitCode {
     let dir = Path::new(dir);
     if let Err(e) = std::fs::create_dir_all(dir) {
         eprintln!("could not create {}: {e}", dir.display());
         return ExitCode::FAILURE;
     }
 
-    // Generate keys and assign addresses.
+    // Generate keys and assign addresses. In docker mode each node advertises a
+    // service-name address (resolved on the compose network) and binds 0.0.0.0.
     let mut validators = Vec::new();
     let mut keys = Vec::new();
     for i in 0..n {
@@ -60,10 +128,12 @@ fn init_devnet(dir: &str, n: usize) -> ExitCode {
                 return ExitCode::FAILURE;
             }
         };
-        validators.push(ValidatorInfo {
-            pubkey: pk,
-            addr: format!("127.0.0.1:{}", 9000 + i),
-        });
+        let addr = if docker {
+            format!("node{i}:9000")
+        } else {
+            format!("127.0.0.1:{}", 9000 + i)
+        };
+        validators.push(ValidatorInfo { pubkey: pk, addr });
         keys.push(key_path);
     }
 
@@ -85,18 +155,35 @@ fn init_devnet(dir: &str, n: usize) -> ExitCode {
     }
 
     for (i, key) in keys.iter().enumerate() {
+        let (key_path, store_path, listen, rpc) = if docker {
+            (
+                format!("/data/node{i}.key"),
+                format!("/data/node{i}.blocks"),
+                Some("0.0.0.0:9000".to_string()),
+                Some("0.0.0.0:7000".to_string()),
+            )
+        } else {
+            (
+                key.to_string_lossy().into_owned(),
+                dir.join(format!("node{i}.blocks")).to_string_lossy().into_owned(),
+                None,
+                Some(format!("127.0.0.1:{}", 7000 + i)),
+            )
+        };
         let cfg = NodeConfig {
             genesis: genesis.clone(),
-            key_path: key.to_string_lossy().into_owned(),
-            block_store_path: dir.join(format!("node{i}.blocks")).to_string_lossy().into_owned(),
+            key_path,
+            block_store_path: store_path,
             base_timeout_ms: 1000,
+            listen,
+            peers: None,
             anchor_interval: 0,
             anchor_backend: None,
             anchor_file: None,
             notaryhash_endpoint: None,
             notaryhash_api_key_env: None,
             anchor_key_path: None,
-            rpc_addr: Some(format!("127.0.0.1:{}", 7000 + i)),
+            rpc_addr: rpc,
         };
         if let Err(e) = write(dir.join(format!("node{i}.config.json")), &serde_json::to_value(&cfg).unwrap()) {
             eprintln!("write config failed: {e}");
@@ -151,11 +238,19 @@ fn run(config_path: &str) -> ExitCode {
         }
     };
 
-    // Find our own listen address in the genesis roster.
-    let my_addr = match cfg.genesis.validators.iter().find(|v| v.pubkey == pk) {
-        Some(v) => v.addr.clone(),
+    let is_validator = cfg.genesis.validators.iter().any(|v| v.pubkey == pk);
+
+    // Bind address: explicit `listen`, else our advertised address from genesis.
+    let my_addr = match cfg
+        .listen
+        .clone()
+        .or_else(|| cfg.genesis.validators.iter().find(|v| v.pubkey == pk).map(|v| v.addr.clone()))
+    {
+        Some(a) => a,
         None => {
-            eprintln!("this node's public key is not in the genesis validator set");
+            eprintln!(
+                "no listen address: set `listen` in config, or include this node in genesis"
+            );
             return ExitCode::FAILURE;
         }
     };
@@ -167,12 +262,22 @@ fn run(config_path: &str) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    transport.set_peers(cfg.genesis.peer_addrs(&pk));
+    // Peers: explicit list, else every other validator in genesis.
+    let peers = cfg.peers.clone().unwrap_or_else(|| cfg.genesis.peer_addrs(&pk));
+    transport.set_peers(peers);
 
     println!("chain     : {}", cfg.genesis.chain_id);
     println!("identity  : {}", pk.id());
     println!("listening : {my_addr}");
     println!("validators: {}", cfg.genesis.validators.len());
+    println!(
+        "role      : {}",
+        if is_validator {
+            "validator"
+        } else {
+            "follower (awaiting governance to become a validator)"
+        }
+    );
 
     // Resolve the anchor identity before the validator key moves into the node:
     // a dedicated anchor keystore if configured, otherwise the validator key.

@@ -31,6 +31,7 @@ fn main() -> ExitCode {
         Some("verify") => verify(rest),
         Some("verify-anchored") => verify_anchored(rest),
         Some("status") => status(rest),
+        Some("node-info") => node_info(rest),
         _ => return usage(),
     };
     match result {
@@ -53,6 +54,7 @@ fn usage() -> ExitCode {
     eprintln!("  slc verify <proof.json> <genesis.json>");
     eprintln!("  slc verify-anchored <proof.json> <genesis.json>");
     eprintln!("  slc status <node_rpc>");
+    eprintln!("  slc node-info <node_rpc>");
     eprintln!("  slc gov propose --add <pk> [--remove <pk>] --activation <h> [--out f.json]");
     eprintln!("  slc gov approve <change.json> <validator-keystore.json>");
     eprintln!("  slc gov submit <change.json> <node_rpc>");
@@ -299,5 +301,16 @@ fn status(a: &[String]) -> R {
     let (height, tip) = client::status(node).map_err(|e| e.to_string())?;
     println!("height: {height}");
     println!("tip   : {tip}");
+    Ok(())
+}
+
+fn node_info(a: &[String]) -> R {
+    let node = a.first().ok_or("node-info <node_rpc>")?;
+    let (chain_id, pubkey, height, tip) = client::node_info(node).map_err(|e| e.to_string())?;
+    println!("chain_id : {chain_id}");
+    println!("identity : {}", pubkey.id());
+    println!("pubkey   : {}", pubkey.to_hex());
+    println!("height   : {height}");
+    println!("tip      : {tip}");
     Ok(())
 }

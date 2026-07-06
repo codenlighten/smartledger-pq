@@ -7,7 +7,7 @@ use crate::event::Event;
 use crate::frame::{read_frame, write_frame};
 use serde::{Deserialize, Serialize};
 use slc_anchor::{AnchorService, AnchoredProof};
-use slc_crypto::Hash;
+use slc_crypto::{Hash, VerifyingKey};
 use slc_ledger::{Attestation, Block, NotarizationProof, SignedValidatorChange};
 use std::io;
 use std::net::{TcpListener, TcpStream};
@@ -36,31 +36,43 @@ pub enum RpcRequest {
     GetAnchoredProof(Hash),
     /// Chain status.
     Status,
+    /// This node's identity (chain id + public key) and chain tip.
+    NodeInfo,
 }
 
 /// A response to a client.
+///
+/// Variant sizes differ because post-quantum objects (public keys ~2 KB) are
+/// large; that is intrinsic to the scheme.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum RpcResponse {
     Submitted { accepted: bool },
     Proof(Box<Option<NotarizationProof>>),
     AnchoredProof(Box<Option<AnchoredProof>>),
     Status { height: u64, tip: Hash },
+    NodeInfo { chain_id: String, pubkey: VerifyingKey, height: u64, tip: Hash },
     Error(String),
 }
 
 /// Start the RPC accept loop on `listener` in a background thread.
+#[allow(clippy::too_many_arguments)]
 pub fn serve(
     listener: TcpListener,
     ev_tx: Sender<Event>,
     committed: Arc<Mutex<Vec<Block>>>,
     anchor: SharedAnchor,
+    chain_id: String,
+    pubkey: VerifyingKey,
 ) {
     thread::spawn(move || {
         for stream in listener.incoming().flatten() {
             let ev_tx = ev_tx.clone();
             let committed = committed.clone();
             let anchor = anchor.clone();
-            thread::spawn(move || handle_conn(stream, ev_tx, committed, anchor));
+            let chain_id = chain_id.clone();
+            let pubkey = pubkey.clone();
+            thread::spawn(move || handle_conn(stream, ev_tx, committed, anchor, chain_id, pubkey));
         }
     });
 }
@@ -70,6 +82,8 @@ fn handle_conn(
     ev_tx: Sender<Event>,
     committed: Arc<Mutex<Vec<Block>>>,
     anchor: SharedAnchor,
+    chain_id: String,
+    pubkey: VerifyingKey,
 ) {
     // One connection may carry many requests until the client hangs up.
     while let Ok(req) = read_frame::<_, RpcRequest>(&mut stream) {
@@ -95,6 +109,19 @@ fn handle_conn(
                     .map(|b| (b.header.height, b.header.id()))
                     .unwrap_or((0, Hash::zero()));
                 RpcResponse::Status { height, tip }
+            }
+            RpcRequest::NodeInfo => {
+                let blocks = committed.lock().unwrap();
+                let (height, tip) = blocks
+                    .last()
+                    .map(|b| (b.header.height, b.header.id()))
+                    .unwrap_or((0, Hash::zero()));
+                RpcResponse::NodeInfo {
+                    chain_id: chain_id.clone(),
+                    pubkey: pubkey.clone(),
+                    height,
+                    tip,
+                }
             }
         };
         if write_frame(&mut stream, &resp).is_err() {

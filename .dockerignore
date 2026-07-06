@@ -1,0 +1,6 @@
+/target
+**/*.rs.bk
+.git
+*.key
+keystore/
+/deploy/devnet

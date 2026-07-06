@@ -81,6 +81,8 @@ mod tests {
             key_path: "k".into(),
             block_store_path: "b".into(),
             base_timeout_ms: 1000,
+            listen: None,
+            peers: None,
             anchor_interval: 2,
             anchor_backend: None,
             anchor_file: None,
