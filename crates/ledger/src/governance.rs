@@ -77,6 +77,22 @@ impl SignedValidatorChange {
         }
     }
 
+    /// A deterministic commitment to this change and its approver set, used to
+    /// bind governance into a block header. Approvals are committed by approver
+    /// id (sorted), so the block header pins *who* authorized the change.
+    pub fn commitment(&self) -> Hash {
+        let mut approver_ids: Vec<[u8; 32]> =
+            self.approvals.iter().map(|a| *a.validator.id().as_bytes()).collect();
+        approver_ids.sort_unstable();
+        let mut buf = Vec::new();
+        buf.extend_from_slice(self.change.id().as_bytes());
+        buf.extend_from_slice(&(approver_ids.len() as u32).to_be_bytes());
+        for id in &approver_ids {
+            buf.extend_from_slice(id);
+        }
+        Hash::digest(&buf)
+    }
+
     /// Add an approval (validity is checked in [`Self::is_authorized`]).
     pub fn approve(&mut self, validator: VerifyingKey, signature: slc_crypto::Signature) {
         self.approvals.push(ValidatorSig {
@@ -111,6 +127,18 @@ impl SignedValidatorChange {
         }
         valid >= current.threshold()
     }
+}
+
+/// A domain-separated commitment to the ordered governance changes in a block.
+/// Placed in the block header so the quorum certificate covers governance too.
+pub fn governance_root(changes: &[SignedValidatorChange]) -> Hash {
+    let mut buf = Vec::new();
+    buf.extend_from_slice(b"SLC-govroot-v1");
+    buf.extend_from_slice(&(changes.len() as u32).to_be_bytes());
+    for c in changes {
+        buf.extend_from_slice(c.commitment().as_bytes());
+    }
+    Hash::digest(&buf)
 }
 
 /// The evolving validator roster: genesis plus every activated change.

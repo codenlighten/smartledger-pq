@@ -20,18 +20,23 @@ pub struct BlockHeader {
     /// Unix seconds. In consensus this is the median of validator clocks, so it
     /// is a value the quorum collectively vouches for — the notarized *time*.
     pub timestamp: u64,
+    /// Commitment to this block's governance changes (see
+    /// [`crate::governance::governance_root`]); binds validator-set changes into
+    /// the quorum certificate. Empty-list root when there are none.
+    pub gov_root: Hash,
 }
 
 impl BlockHeader {
     /// Deterministic, fixed-layout encoding. This is both the block id preimage
     /// and the message validators sign, so it must be canonical.
     pub fn signing_bytes(&self) -> Vec<u8> {
-        let mut buf = Vec::with_capacity(8 + Hash::LEN + Hash::LEN + 4 + 8);
+        let mut buf = Vec::with_capacity(8 + Hash::LEN * 3 + 4 + 8);
         buf.extend_from_slice(&self.height.to_be_bytes());
         buf.extend_from_slice(self.prev_hash.as_bytes());
         buf.extend_from_slice(self.merkle_root.as_bytes());
         buf.extend_from_slice(&self.tx_count.to_be_bytes());
         buf.extend_from_slice(&self.timestamp.to_be_bytes());
+        buf.extend_from_slice(self.gov_root.as_bytes());
         buf
     }
 
@@ -123,11 +128,13 @@ impl QuorumCertificate {
     }
 }
 
-/// A finalized block: its header, the attestations it seals, and the quorum
-/// certificate proving the validator set ratified it.
+/// A finalized block: its header, the attestations it seals, any validator-set
+/// changes it enacts, and the quorum certificate proving the set ratified it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Block {
     pub header: BlockHeader,
     pub attestations: Vec<Attestation>,
+    #[serde(default)]
+    pub governance: Vec<crate::SignedValidatorChange>,
     pub qc: QuorumCertificate,
 }

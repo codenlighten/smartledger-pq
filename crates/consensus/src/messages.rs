@@ -7,15 +7,18 @@
 
 use serde::{Deserialize, Serialize};
 use slc_crypto::{context, Hash, Signature, SigningKey, VerifyingKey};
-use slc_ledger::{Attestation, BlockHeader, MerkleTree};
+use slc_ledger::governance::governance_root;
+use slc_ledger::{Attestation, BlockHeader, MerkleTree, SignedValidatorChange, ValidatorSet};
 
-/// A candidate block value: a header plus the attestations it commits to. The
-/// finalized [`slc_ledger::Block`] (header + attestations + QC) is assembled
-/// only once a precommit quorum forms.
+/// A candidate block value: a header plus the attestations and validator-set
+/// changes it commits to. The finalized [`slc_ledger::Block`] is assembled only
+/// once a precommit quorum forms.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Proposed {
     pub header: BlockHeader,
     pub attestations: Vec<Attestation>,
+    #[serde(default)]
+    pub governance: Vec<SignedValidatorChange>,
 }
 
 impl Proposed {
@@ -24,14 +27,16 @@ impl Proposed {
         self.header.id()
     }
 
-    /// Is this a well-formed value to build on top of `tip` at `height`? Checks
-    /// structural integrity only; each attestation must also self-verify.
+    /// Is this a well-formed value to build on top of `tip` at `height`, given
+    /// the validator set `current` in force there?
     ///
-    /// A valid block is **never empty**: blocks exist only to notarize, so an
-    /// empty block is rejected here. This makes empty-block production not just
-    /// discouraged but structurally impossible — no quorum will ratify one.
-    pub fn is_valid(&self, tip: Hash, height: u64) -> bool {
-        if self.attestations.is_empty() {
+    /// A valid block is **never empty**: it must notarize at least one document
+    /// or enact at least one governance change. Every governance change must be
+    /// authorized by a quorum of the *current* validators and activate strictly
+    /// in the future, so the block finalizing it is still ratified by the set
+    /// that approved it.
+    pub fn is_valid(&self, tip: Hash, height: u64, current: &ValidatorSet) -> bool {
+        if self.attestations.is_empty() && self.governance.is_empty() {
             return false;
         }
         if self.header.height != height || self.header.prev_hash != tip {
@@ -44,7 +49,18 @@ impl Proposed {
             return false;
         }
         let leaves: Vec<Hash> = self.attestations.iter().map(|a| a.leaf_hash()).collect();
-        MerkleTree::build(leaves).root() == self.header.merkle_root
+        if MerkleTree::build(leaves).root() != self.header.merkle_root {
+            return false;
+        }
+        if governance_root(&self.governance) != self.header.gov_root {
+            return false;
+        }
+        for change in &self.governance {
+            if !change.is_authorized(current) || change.change.activation_height <= height {
+                return false;
+            }
+        }
+        true
     }
 }
 
@@ -215,23 +231,33 @@ fn verify_vote(
 mod tests {
     use super::*;
     use slc_crypto::SigningKey;
-    use slc_ledger::BlockHeader;
+    use slc_ledger::{BlockHeader, ValidatorSet};
+
+    fn a_set() -> ValidatorSet {
+        let mut pks = Vec::new();
+        for _ in 0..4 {
+            pks.push(SigningKey::generate().unwrap().1);
+        }
+        ValidatorSet::bft(pks)
+    }
 
     #[test]
     fn empty_block_is_invalid() {
-        // A header claiming zero transactions can never be a valid value.
+        // A block with neither attestations nor governance can never be valid.
         let header = BlockHeader {
             height: 1,
             prev_hash: Hash::zero(),
             merkle_root: slc_ledger::merkle::empty_root(),
             tx_count: 0,
             timestamp: 0,
+            gov_root: governance_root(&[]),
         };
         let value = Proposed {
             header,
             attestations: vec![],
+            governance: vec![],
         };
-        assert!(!value.is_valid(Hash::zero(), 1), "empty blocks must be rejected");
+        assert!(!value.is_valid(Hash::zero(), 1, &a_set()), "empty blocks must be rejected");
     }
 
     #[test]
@@ -245,11 +271,13 @@ mod tests {
             merkle_root,
             tx_count: 1,
             timestamp: 0,
+            gov_root: governance_root(&[]),
         };
         let value = Proposed {
             header,
             attestations: vec![att],
+            governance: vec![],
         };
-        assert!(value.is_valid(Hash::zero(), 1));
+        assert!(value.is_valid(Hash::zero(), 1, &a_set()));
     }
 }

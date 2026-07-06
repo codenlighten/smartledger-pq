@@ -37,6 +37,7 @@ fn seal_block(
         merkle_root,
         tx_count: attestations.len() as u32,
         timestamp,
+        gov_root: slc_ledger::governance::governance_root(&[]),
     };
 
     let mut qc = QuorumCertificate::new(header.id());
@@ -48,6 +49,7 @@ fn seal_block(
     Block {
         header,
         attestations,
+        governance: vec![],
         qc,
     }
 }
@@ -128,6 +130,7 @@ fn outsider_validator_signature_does_not_count() {
         merkle_root,
         tx_count: 1,
         timestamp: 1_751_000_000,
+        gov_root: slc_ledger::governance::governance_root(&[]),
     };
     let mut qc = QuorumCertificate::new(header.id());
     qc.add(v_pks[0].clone(), header.sign(&v_sks[0]).unwrap());
@@ -138,6 +141,7 @@ fn outsider_validator_signature_does_not_count() {
     let block = Block {
         header,
         attestations: vec![att],
+        governance: vec![],
         qc,
     };
     let proof = NotarizationProof::from_block(&block, 0).unwrap();

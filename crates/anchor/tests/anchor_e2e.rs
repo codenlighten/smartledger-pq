@@ -35,12 +35,13 @@ fn seal(
         merkle_root: MerkleTree::build(leaves).root(),
         tx_count: atts.len() as u32,
         timestamp: 1_751_000_000 + height,
+        gov_root: slc_ledger::governance::governance_root(&[]),
     };
     let mut qc = QuorumCertificate::new(header.id());
     for i in 0..quorum {
         qc.add(pks[i].clone(), header.sign(&sks[i]).unwrap());
     }
-    Block { header, attestations: atts, qc }
+    Block { header, attestations: atts, governance: vec![], qc }
 }
 
 #[test]

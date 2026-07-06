@@ -38,6 +38,7 @@ fn main() {
         merkle_root,
         tx_count: 1,
         timestamp: 1_751_731_200, // 2026-07-05T16:00:00Z
+        gov_root: slc_ledger::governance::governance_root(&[]),
     };
     let mut qc = QuorumCertificate::new(header.id());
     for i in 0..set.threshold() {
@@ -46,6 +47,7 @@ fn main() {
     let block = Block {
         header,
         attestations: vec![att],
+        governance: vec![],
         qc,
     };
     println!("block id    : {}", block.header.id());

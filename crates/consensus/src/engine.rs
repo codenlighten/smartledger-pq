@@ -14,9 +14,10 @@
 
 use crate::messages::{ConsensusMsg, Proposed, ProposalMsg, VoteMsg, VoteType};
 use slc_crypto::{Hash, SigningKey, VerifyingKey};
+use slc_ledger::governance::governance_root;
 use slc_ledger::{
-    Attestation, Block, BlockHeader, MerkleTree, QuorumCertificate, ValidatorChange,
-    ValidatorRegistry, ValidatorSet,
+    Attestation, Block, BlockHeader, MerkleTree, QuorumCertificate, SignedValidatorChange,
+    ValidatorChange, ValidatorRegistry, ValidatorSet,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -98,6 +99,8 @@ pub struct Engine {
     valid_round: Option<u64>,
 
     mempool: Vec<Attestation>,
+    /// Pending, authorized validator-set changes awaiting inclusion in a block.
+    gov_mempool: Vec<SignedValidatorChange>,
 
     // Message stores for the current height, keyed by round.
     proposals: HashMap<u64, ProposalMsg>,
@@ -158,6 +161,7 @@ impl Engine {
             valid_value: None,
             valid_round: None,
             mempool: Vec::new(),
+            gov_mempool: Vec::new(),
             proposals: HashMap::new(),
             prevotes: HashMap::new(),
             precommits: HashMap::new(),
@@ -210,6 +214,25 @@ impl Engine {
             self.advance(&mut out);
         }
         out
+    }
+
+    /// Submit an authorized validator-set change for inclusion in a block. It is
+    /// accepted only if authorized by a quorum of the *current* validators and it
+    /// activates strictly in the future. Like an attestation, it wakes an idle
+    /// proposer. Returns effects (and whether it was accepted).
+    pub fn add_governance(&mut self, change: SignedValidatorChange) -> (bool, Vec<Effect>) {
+        let ok = change.is_authorized(&self.current_set)
+            && change.change.activation_height > self.height
+            && !self.gov_mempool.iter().any(|g| g.commitment() == change.commitment());
+        let mut out = Vec::new();
+        if ok {
+            self.gov_mempool.push(change);
+            if self.parked {
+                self.unpark(&mut out);
+                self.advance(&mut out);
+            }
+        }
+        (ok, out)
     }
 
     /// Whether the engine is currently idling with nothing to notarize.
@@ -303,16 +326,28 @@ impl Engine {
             self.mempool.iter().take(MAX_TXS).cloned().collect();
         let leaves: Vec<Hash> = attestations.iter().map(|a| a.leaf_hash()).collect();
         let merkle_root = MerkleTree::build(leaves).root();
+        // Include only governance changes still authorized and future-activating
+        // against the current set.
+        let governance: Vec<SignedValidatorChange> = self
+            .gov_mempool
+            .iter()
+            .filter(|g| {
+                g.is_authorized(&self.current_set) && g.change.activation_height > self.height
+            })
+            .cloned()
+            .collect();
         let header = BlockHeader {
             height: self.height,
             prev_hash: self.tip,
             merkle_root,
             tx_count: attestations.len() as u32,
             timestamp: self.now,
+            gov_root: governance_root(&governance),
         };
         Proposed {
             header,
             attestations,
+            governance,
         }
     }
 
@@ -339,7 +374,11 @@ impl Engine {
         // At the start of a fresh height with nothing pending, idle instead of
         // proposing. We only reach round 0 with `valid_value == None` (it is
         // reset on commit), so an empty mempool here means truly nothing to do.
-        if round == 0 && self.valid_value.is_none() && self.mempool.is_empty() {
+        if round == 0
+            && self.valid_value.is_none()
+            && self.mempool.is_empty()
+            && self.gov_mempool.is_empty()
+        {
             self.parked = true;
             return;
         }
@@ -356,8 +395,8 @@ impl Engine {
                 None => (self.get_value(), None),
             };
             // Never propose an empty block — no quorum would ratify it anyway.
-            // With an empty mempool we instead let the round time out.
-            if !value.attestations.is_empty() {
+            // A block must notarize or govern; otherwise let the round time out.
+            if !value.attestations.is_empty() || !value.governance.is_empty() {
                 let pm =
                     ProposalMsg::create(&self.me_sk, self.me_pk.clone(), self.height, round, vr, value);
                 self.proposals.entry(round).or_insert_with(|| pm.clone());
@@ -464,7 +503,7 @@ impl Engine {
         for (r, id) in candidates {
             if self.count_precommits(r, Match::Id(id)) >= self.quorum() {
                 let pm = self.proposals.get(&r).expect("present").clone();
-                if pm.value.is_valid(self.tip, self.height) {
+                if pm.value.is_valid(self.tip, self.height, &self.current_set) {
                     self.commit(r, id, pm.value, out);
                     return true;
                 }
@@ -512,7 +551,7 @@ impl Engine {
         let v = &pm.value;
         let acceptable =
             self.locked_round.is_none() || self.locked_id() == Some(v.id());
-        let id = if v.is_valid(self.tip, self.height) && acceptable {
+        let id = if v.is_valid(self.tip, self.height, &self.current_set) && acceptable {
             Some(v.id())
         } else {
             None
@@ -538,7 +577,7 @@ impl Engine {
         let v = &pm.value;
         let acceptable =
             self.locked_round.is_none_or(|lr| lr <= vr) || self.locked_id() == Some(v.id());
-        let id = if v.is_valid(self.tip, self.height) && acceptable {
+        let id = if v.is_valid(self.tip, self.height, &self.current_set) && acceptable {
             Some(v.id())
         } else {
             None
@@ -577,7 +616,7 @@ impl Engine {
         };
         let v = &pm.value;
         if self.count_prevotes(self.round, Match::Id(v.id())) < self.quorum()
-            || !v.is_valid(self.tip, self.height)
+            || !v.is_valid(self.tip, self.height, &self.current_set)
         {
             return false;
         }
@@ -634,12 +673,21 @@ impl Engine {
         let block = Block {
             header: value.header.clone(),
             attestations: value.attestations.clone(),
+            governance: value.governance.clone(),
             qc,
         };
 
         // Drop the now-sealed attestations from the mempool.
         let sealed: HashSet<Hash> = block.attestations.iter().map(|a| a.leaf_hash()).collect();
         self.mempool.retain(|a| !sealed.contains(&a.leaf_hash()));
+
+        // Enact this block's governance: record each change (it activates at its
+        // future height) and drop it from the pending pool.
+        let enacted: HashSet<Hash> = block.governance.iter().map(|g| g.commitment()).collect();
+        for signed in &block.governance {
+            self.registry.record(signed.change.clone());
+        }
+        self.gov_mempool.retain(|g| !enacted.contains(&g.commitment()));
 
         out.push(Effect::Committed(Box::new(block)));
 
