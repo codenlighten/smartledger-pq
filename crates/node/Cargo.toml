@@ -25,3 +25,7 @@ serde.workspace = true
 serde_json.workspace = true
 hex.workspace = true
 thiserror.workspace = true
+
+[features]
+# Enables the BSV/notaryhash anchor backend end to end from the node.
+notaryhash = ["slc-anchor/notaryhash"]

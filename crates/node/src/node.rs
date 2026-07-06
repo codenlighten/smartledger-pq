@@ -201,6 +201,13 @@ impl Node {
                         if let Some(record) =
                             anchor.record_block(block.header.id(), block.header.height)
                         {
+                            println!(
+                                "anchored checkpoint heights {}..={} via {} -> {}",
+                                record.from_height,
+                                record.to_height,
+                                record.receipt.backend,
+                                record.receipt.reference
+                            );
                             self.anchor_records.lock().unwrap().push(record);
                         }
                     }

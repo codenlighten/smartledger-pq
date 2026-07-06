@@ -82,6 +82,21 @@ key and publishes it to **BSV mainnet** via notaryhash.com's OP_RETURN notarize
 API — the same post-quantum key that secures the chain signs its public anchor
 (cross-verified against notaryhash's FIPS 204 stack; confirmed live on-chain).
 
+A node anchors **automatically**: build with `--features notaryhash` and set in
+its config:
+
+```json
+"anchor_interval": 100,
+"anchor_backend": "notaryhash",
+"notaryhash_endpoint": "https://notaryhash.com",
+"notaryhash_api_key_env": "NOTARYHASH_API_KEY"
+```
+
+Every `anchor_interval` finalized blocks, the node publishes a checkpoint and
+logs `anchored checkpoint heights X..=Y via notaryhash-bsv -> bsv-mainnet:<txid>`.
+The API key is read from the named env var, never stored in config; the anchor
+identity defaults to the validator key (override with `anchor_key_path`).
+
 ## Status
 
 **End to end and tested** (42 tests, clippy clean): attest → Merkle batch →

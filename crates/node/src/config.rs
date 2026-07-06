@@ -53,11 +53,25 @@ pub struct NodeConfig {
     /// anchoring.
     #[serde(default)]
     pub anchor_interval: u64,
-    /// If set (and anchoring is enabled), append anchor records to this file
-    /// (a local stand-in for a public chain). Otherwise an in-memory backend is
-    /// used.
+    /// Which anchor backend to use: `"mock"`, `"file"`, or `"notaryhash"`.
+    /// If unset: `"file"` when `anchor_file` is set, else `"mock"`.
+    #[serde(default)]
+    pub anchor_backend: Option<String>,
+    /// If set (and the file backend is used), append anchor records to this file
+    /// (a local stand-in for a public chain).
     #[serde(default)]
     pub anchor_file: Option<String>,
+    /// notaryhash base URL (defaults to `https://notaryhash.com`).
+    #[serde(default)]
+    pub notaryhash_endpoint: Option<String>,
+    /// Name of the environment variable holding the notaryhash API key
+    /// (defaults to `NOTARYHASH_API_KEY`). The key is never stored in config.
+    #[serde(default)]
+    pub notaryhash_api_key_env: Option<String>,
+    /// Optional dedicated anchor keystore. If unset, the node signs anchors with
+    /// its own validator key.
+    #[serde(default)]
+    pub anchor_key_path: Option<String>,
     /// Client-facing RPC listen address (e.g. `0.0.0.0:7000`). Disabled if unset.
     #[serde(default)]
     pub rpc_addr: Option<String>,

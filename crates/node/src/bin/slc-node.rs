@@ -4,9 +4,10 @@
 //!   slc-node keygen <keystore.json>       Generate a validator keypair.
 //!   slc-node run <config.json>            Run a validator from a node config.
 
-use slc_anchor::{AnchorService, FileAnchor, MockAnchor};
+use slc_anchor::AnchorService;
+use slc_crypto::SigningKey;
 use slc_node::config::{GenesisConfig, NodeConfig, ValidatorInfo};
-use slc_node::{keystore, Node, Transport};
+use slc_node::{anchoring, keystore, Node, Transport};
 use std::path::Path;
 use std::process::ExitCode;
 use std::time::Duration;
@@ -90,7 +91,11 @@ fn init_devnet(dir: &str, n: usize) -> ExitCode {
             block_store_path: dir.join(format!("node{i}.blocks")).to_string_lossy().into_owned(),
             base_timeout_ms: 1000,
             anchor_interval: 0,
+            anchor_backend: None,
             anchor_file: None,
+            notaryhash_endpoint: None,
+            notaryhash_api_key_env: None,
+            anchor_key_path: None,
             rpc_addr: Some(format!("127.0.0.1:{}", 7000 + i)),
         };
         if let Err(e) = write(dir.join(format!("node{i}.config.json")), &serde_json::to_value(&cfg).unwrap()) {
@@ -169,6 +174,27 @@ fn run(config_path: &str) -> ExitCode {
     println!("listening : {my_addr}");
     println!("validators: {}", cfg.genesis.validators.len());
 
+    // Resolve the anchor identity before the validator key moves into the node:
+    // a dedicated anchor keystore if configured, otherwise the validator key.
+    let anchor_identity = if cfg.anchor_interval > 0 {
+        match &cfg.anchor_key_path {
+            Some(p) => match keystore::load(Path::new(p)) {
+                Ok(kp) => Some(kp),
+                Err(e) => {
+                    eprintln!("could not load anchor keystore {p}: {e}");
+                    return ExitCode::FAILURE;
+                }
+            },
+            // Reuse the validator key (reconstructed so `sk` can still move on).
+            None => Some((
+                SigningKey::from_bytes(&sk.to_bytes()).expect("clone key"),
+                pk.clone(),
+            )),
+        }
+    } else {
+        None
+    };
+
     let mut node = Node::new(
         transport,
         &cfg.genesis,
@@ -179,18 +205,23 @@ fn run(config_path: &str) -> ExitCode {
     );
 
     // Optional public-chain anchoring.
-    if cfg.anchor_interval > 0 {
-        let backend: Box<dyn slc_anchor::AnchorBackend> = match &cfg.anchor_file {
-            Some(path) => Box::new(FileAnchor::new(path.clone())),
-            None => Box::new(MockAnchor::new()),
-        };
-        let service = AnchorService::new(backend, cfg.anchor_interval as usize);
-        println!(
-            "anchoring : every {} blocks via {}",
-            cfg.anchor_interval,
-            service.backend_name()
-        );
-        node = node.with_anchor(service);
+    if let Some((anchor_sk, anchor_pk)) = anchor_identity {
+        match anchoring::build_backend(&cfg, anchor_sk, anchor_pk) {
+            Ok(Some(backend)) => {
+                let service = AnchorService::new(backend, cfg.anchor_interval as usize);
+                println!(
+                    "anchoring : every {} blocks via {}",
+                    cfg.anchor_interval,
+                    service.backend_name()
+                );
+                node = node.with_anchor(service);
+            }
+            Ok(None) => {}
+            Err(e) => {
+                eprintln!("anchor configuration error: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
     }
 
     // Optional client-facing RPC.
