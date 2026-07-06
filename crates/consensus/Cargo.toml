@@ -1,0 +1,11 @@
+[package]
+name = "slc-consensus"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+slc-crypto.workspace = true
+slc-ledger.workspace = true
+serde.workspace = true
+thiserror.workspace = true

@@ -1,0 +1,8 @@
+/target
+**/*.rs.bk
+Cargo.lock.orig
+
+# Secrets — never commit operator secret keys
+*.sk
+*.key
+keystore/
