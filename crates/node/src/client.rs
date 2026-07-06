@@ -4,6 +4,7 @@
 
 use crate::config::GenesisConfig;
 use crate::rpc::{call, RpcRequest, RpcResponse};
+use slc_anchor::AnchoredProof;
 use slc_crypto::{Hash, SigningKey, VerifyingKey};
 use slc_ledger::{Attestation, NotarizationProof, ValidatorSet};
 use std::io;
@@ -44,6 +45,16 @@ pub fn get_proof(node_rpc: &str, doc_hash: Hash) -> io::Result<Option<Notarizati
     }
 }
 
+/// Fetch a BSV-hardened anchored proof for `doc_hash`, if the block has been
+/// anchored yet.
+pub fn get_anchored_proof(node_rpc: &str, doc_hash: Hash) -> io::Result<Option<AnchoredProof>> {
+    match call(node_rpc, &RpcRequest::GetAnchoredProof(doc_hash))? {
+        RpcResponse::AnchoredProof(p) => Ok(*p),
+        RpcResponse::Error(e) => Err(other(e)),
+        _ => Err(other("unexpected response to get-anchored-proof")),
+    }
+}
+
 /// The chain height and tip reported by a node.
 pub fn status(node_rpc: &str) -> io::Result<(u64, Hash)> {
     match call(node_rpc, &RpcRequest::Status)? {
@@ -55,6 +66,13 @@ pub fn status(node_rpc: &str) -> io::Result<(u64, Hash)> {
 
 /// Verify a proof offline against the validator set defined by `genesis`.
 pub fn verify_proof(proof: &NotarizationProof, genesis: &GenesisConfig) -> bool {
+    let set = ValidatorSet::bft(genesis.validator_keys());
+    proof.verify(&set).is_ok()
+}
+
+/// Verify an anchored proof offline against `genesis`: the notarization, the
+/// checkpoint inclusion, and the published receipt.
+pub fn verify_anchored_proof(proof: &AnchoredProof, genesis: &GenesisConfig) -> bool {
     let set = ValidatorSet::bft(genesis.validator_keys());
     proof.verify(&set).is_ok()
 }

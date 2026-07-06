@@ -73,7 +73,16 @@ cargo build --release
 ./target/release/slc notarize ./contract.pdf ./devnet/client.key 127.0.0.1:7000
 ./target/release/slc get-proof <hash> 127.0.0.1:7000 proof.json
 ./target/release/slc verify   proof.json ./devnet/genesis.json      # VALID ✔ — offline
+
+# once the checkpoint containing it is anchored, pull the BSV-hardened proof:
+./target/release/slc get-anchored-proof <hash> 127.0.0.1:7000 anchored.json
+./target/release/slc verify-anchored anchored.json ./devnet/genesis.json
 ```
+
+`verify-anchored` checks all four layers offline — the actor's post-quantum
+signature, Merkle inclusion in the block, the validator quorum certificate, and
+that the block sits under a checkpoint root whose receipt points to its public
+(BSV) anchor.
 
 ### Anchoring to BSV
 The `slc-anchor` crate anchors periodic checkpoints. With the `notaryhash`

@@ -34,8 +34,9 @@ pub struct Node {
     ev_rx: Receiver<Event>,
     ev_tx: Sender<Event>,
     base_timeout: Duration,
-    /// Publishes periodic checkpoints to a public chain, when configured.
-    anchor: Option<AnchorService>,
+    /// Publishes periodic checkpoints to a public chain, when configured. Shared
+    /// so the RPC can reconstruct anchored proofs from its checkpoint history.
+    anchor: Option<Arc<Mutex<AnchorService>>>,
     /// Observable log of every checkpoint this node has anchored.
     anchor_records: Arc<Mutex<Vec<AnchorRecord>>>,
     /// Client-facing RPC listen address, when enabled.
@@ -117,7 +118,7 @@ impl Node {
 
     /// Enable periodic public-chain anchoring with the given service.
     pub fn with_anchor(mut self, service: AnchorService) -> Node {
-        self.anchor = Some(service);
+        self.anchor = Some(Arc::new(Mutex::new(service)));
         self
     }
 
@@ -137,7 +138,9 @@ impl Node {
         // Start the client RPC before the loop moves onto its thread.
         if let Some(addr) = &self.rpc_addr {
             match std::net::TcpListener::bind(addr) {
-                Ok(listener) => crate::rpc::serve(listener, ev_tx.clone(), committed.clone()),
+                Ok(listener) => {
+                    crate::rpc::serve(listener, ev_tx.clone(), committed.clone(), self.anchor.clone())
+                }
                 Err(e) => eprintln!("could not bind RPC on {addr}: {e}"),
             }
         }
@@ -197,10 +200,12 @@ impl Node {
                     self.store.append(&block);
                     // Feed the finalized block to the anchoring service; when a
                     // full checkpoint window closes, its root is published.
-                    if let Some(anchor) = &mut self.anchor {
-                        if let Some(record) =
-                            anchor.record_block(block.header.id(), block.header.height)
-                        {
+                    if let Some(anchor) = &self.anchor {
+                        let record = anchor
+                            .lock()
+                            .unwrap()
+                            .record_block(block.header.id(), block.header.height);
+                        if let Some(record) = record {
                             println!(
                                 "anchored checkpoint heights {}..={} via {} -> {}",
                                 record.from_height,

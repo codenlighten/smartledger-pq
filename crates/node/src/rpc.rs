@@ -6,6 +6,7 @@
 use crate::event::Event;
 use crate::frame::{read_frame, write_frame};
 use serde::{Deserialize, Serialize};
+use slc_anchor::{AnchorService, AnchoredProof};
 use slc_crypto::Hash;
 use slc_ledger::{Attestation, Block, NotarizationProof};
 use std::io;
@@ -13,6 +14,9 @@ use std::net::{TcpListener, TcpStream};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::thread;
+
+/// The optional shared anchoring service the RPC reads to build anchored proofs.
+type SharedAnchor = Option<Arc<Mutex<AnchorService>>>;
 
 /// A request from a client.
 ///
@@ -26,6 +30,8 @@ pub enum RpcRequest {
     Submit(Attestation),
     /// Fetch a notarization proof for a notarized document hash, if it exists.
     GetProof(Hash),
+    /// Fetch a BSV-hardened anchored proof, if the block has been anchored.
+    GetAnchoredProof(Hash),
     /// Chain status.
     Status,
 }
@@ -35,22 +41,34 @@ pub enum RpcRequest {
 pub enum RpcResponse {
     Submitted { accepted: bool },
     Proof(Box<Option<NotarizationProof>>),
+    AnchoredProof(Box<Option<AnchoredProof>>),
     Status { height: u64, tip: Hash },
     Error(String),
 }
 
 /// Start the RPC accept loop on `listener` in a background thread.
-pub fn serve(listener: TcpListener, ev_tx: Sender<Event>, committed: Arc<Mutex<Vec<Block>>>) {
+pub fn serve(
+    listener: TcpListener,
+    ev_tx: Sender<Event>,
+    committed: Arc<Mutex<Vec<Block>>>,
+    anchor: SharedAnchor,
+) {
     thread::spawn(move || {
         for stream in listener.incoming().flatten() {
             let ev_tx = ev_tx.clone();
             let committed = committed.clone();
-            thread::spawn(move || handle_conn(stream, ev_tx, committed));
+            let anchor = anchor.clone();
+            thread::spawn(move || handle_conn(stream, ev_tx, committed, anchor));
         }
     });
 }
 
-fn handle_conn(mut stream: TcpStream, ev_tx: Sender<Event>, committed: Arc<Mutex<Vec<Block>>>) {
+fn handle_conn(
+    mut stream: TcpStream,
+    ev_tx: Sender<Event>,
+    committed: Arc<Mutex<Vec<Block>>>,
+    anchor: SharedAnchor,
+) {
     // One connection may carry many requests until the client hangs up.
     while let Ok(req) = read_frame::<_, RpcRequest>(&mut stream) {
         let resp = match req {
@@ -59,6 +77,9 @@ fn handle_conn(mut stream: TcpStream, ev_tx: Sender<Event>, committed: Arc<Mutex
                 RpcResponse::Submitted { accepted }
             }
             RpcRequest::GetProof(hash) => RpcResponse::Proof(Box::new(find_proof(&committed, hash))),
+            RpcRequest::GetAnchoredProof(hash) => {
+                RpcResponse::AnchoredProof(Box::new(find_anchored_proof(&committed, &anchor, hash)))
+            }
             RpcRequest::Status => {
                 let blocks = committed.lock().unwrap();
                 let (height, tip) = blocks
@@ -83,6 +104,19 @@ fn find_proof(committed: &Arc<Mutex<Vec<Block>>>, hash: Hash) -> Option<Notariza
         }
     }
     None
+}
+
+/// Build a BSV-hardened anchored proof for `hash`: the notarization proof plus
+/// the checkpoint inclusion and published receipt — but only once the block has
+/// actually been anchored.
+fn find_anchored_proof(
+    committed: &Arc<Mutex<Vec<Block>>>,
+    anchor: &SharedAnchor,
+    hash: Hash,
+) -> Option<AnchoredProof> {
+    let proof = find_proof(committed, hash)?;
+    let service = anchor.as_ref()?;
+    service.lock().unwrap().anchor_proof(proof)
 }
 
 /// A blocking client call: connect, send one request, read one response.
