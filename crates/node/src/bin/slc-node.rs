@@ -5,7 +5,7 @@
 //!   slc-node run <config.json>            Run a validator from a node config.
 
 use slc_anchor::{AnchorService, FileAnchor, MockAnchor};
-use slc_node::config::NodeConfig;
+use slc_node::config::{GenesisConfig, NodeConfig, ValidatorInfo};
 use slc_node::{keystore, Node, Transport};
 use std::path::Path;
 use std::process::ExitCode;
@@ -22,6 +22,10 @@ fn main() -> ExitCode {
             Some(path) => run(path),
             None => usage(),
         },
+        Some("init-devnet") => match args.get(2) {
+            Some(dir) => init_devnet(dir, args.get(3).and_then(|s| s.parse().ok()).unwrap_or(4)),
+            None => usage(),
+        },
         _ => usage(),
     }
 }
@@ -30,7 +34,80 @@ fn usage() -> ExitCode {
     eprintln!("usage:");
     eprintln!("  slc-node keygen <keystore.json>");
     eprintln!("  slc-node run <config.json>");
+    eprintln!("  slc-node init-devnet <dir> [num_nodes=4]");
     ExitCode::FAILURE
+}
+
+/// Generate keystores, a shared genesis, and per-node configs for a local
+/// N-validator devnet under `dir`.
+fn init_devnet(dir: &str, n: usize) -> ExitCode {
+    let dir = Path::new(dir);
+    if let Err(e) = std::fs::create_dir_all(dir) {
+        eprintln!("could not create {}: {e}", dir.display());
+        return ExitCode::FAILURE;
+    }
+
+    // Generate keys and assign addresses.
+    let mut validators = Vec::new();
+    let mut keys = Vec::new();
+    for i in 0..n {
+        let key_path = dir.join(format!("node{i}.key"));
+        let pk = match keystore::generate(&key_path) {
+            Ok((_, pk)) => pk,
+            Err(e) => {
+                eprintln!("keygen failed: {e}");
+                return ExitCode::FAILURE;
+            }
+        };
+        validators.push(ValidatorInfo {
+            pubkey: pk,
+            addr: format!("127.0.0.1:{}", 9000 + i),
+        });
+        keys.push(key_path);
+    }
+
+    let genesis = GenesisConfig {
+        chain_id: "smartledger-devnet".into(),
+        validators,
+    };
+
+    // Write the genesis (for `slc verify`) and one config per node.
+    let write = |path: std::path::PathBuf, value: &serde_json::Value| -> std::io::Result<()> {
+        std::fs::write(path, serde_json::to_string_pretty(value).unwrap())
+    };
+    if let Err(e) = write(
+        dir.join("genesis.json"),
+        &serde_json::to_value(&genesis).unwrap(),
+    ) {
+        eprintln!("write genesis failed: {e}");
+        return ExitCode::FAILURE;
+    }
+
+    for (i, key) in keys.iter().enumerate() {
+        let cfg = NodeConfig {
+            genesis: genesis.clone(),
+            key_path: key.to_string_lossy().into_owned(),
+            block_store_path: dir.join(format!("node{i}.blocks")).to_string_lossy().into_owned(),
+            base_timeout_ms: 1000,
+            anchor_interval: 0,
+            anchor_file: None,
+            rpc_addr: Some(format!("127.0.0.1:{}", 7000 + i)),
+        };
+        if let Err(e) = write(dir.join(format!("node{i}.config.json")), &serde_json::to_value(&cfg).unwrap()) {
+            eprintln!("write config failed: {e}");
+            return ExitCode::FAILURE;
+        }
+    }
+
+    println!("initialized {n}-node devnet in {}", dir.display());
+    println!("\nlaunch each node in its own terminal:");
+    for i in 0..n {
+        println!("  slc-node run {}/node{i}.config.json", dir.display());
+    }
+    println!("\nthen notarize a document (RPC on 127.0.0.1:7000):");
+    println!("  slc keygen {}/client.key", dir.display());
+    println!("  slc notarize <file> {}/client.key 127.0.0.1:7000", dir.display());
+    ExitCode::SUCCESS
 }
 
 fn keygen(path: &str) -> ExitCode {
@@ -114,6 +191,12 @@ fn run(config_path: &str) -> ExitCode {
             service.backend_name()
         );
         node = node.with_anchor(service);
+    }
+
+    // Optional client-facing RPC.
+    if let Some(rpc) = &cfg.rpc_addr {
+        println!("rpc       : {rpc}");
+        node = node.with_rpc(rpc.clone());
     }
 
     let handle = node.spawn();

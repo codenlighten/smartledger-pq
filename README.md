@@ -48,39 +48,51 @@ crates/
   ledger/   attestations, Merkle proofs, blocks, quorum     ✅ implemented
             certificates, portable notarization proofs
   consensus/ Quorum-Certified Notary BFT + view change,     ✅ implemented
-            deterministic engine + in-memory network tests
-  node/      TCP gossip, timers, storage, daemon + CLI,      ✅ implemented
-            real 4-node devnet integration test
-  anchor/    periodic checkpoint anchoring to a public chain ⏳ planned
+            attestation-triggered (no empty blocks)
+  anchor/    checkpoint anchoring; BSV mainnet via           ✅ implemented
+            notaryhash.com (feature `notaryhash`) — verified live
+  node/      TCP gossip, timers, storage, crash-recovery,    ✅ implemented
+            client RPC, daemon + `slc`/`slc-node` CLIs
 ```
 
-Known limitation: the engine proposes every height continuously, so a running
-node currently produces empty blocks when idle. **Attestation-triggered block
-production** (only build a block when there are pending attestations) is the next
-refinement before leaving a node running long-term.
+An idle chain is **silent** — blocks exist only to notarize, so empty blocks are
+structurally impossible (a valid block always has ≥1 attestation, and the engine
+idles until there is something to notarize).
 
 ## Try it
 
 ```sh
-cargo test                                   # full suite (26 tests, incl. TCP devnet)
+cargo test                                   # full suite (42 tests, incl. real-TCP devnet)
 cargo run -p slc-ledger --example demo       # notarize a doc, print a proof
-cargo run -p slc-node --bin slc-node keygen validator.key   # make a validator key
+
+# Stand up a local 4-node network and notarize a file end to end:
+cargo build --release
+./target/release/slc-node init-devnet ./devnet 4
+# launch each node (own terminal): ./target/release/slc-node run ./devnet/nodeN.config.json
+./target/release/slc keygen   ./devnet/client.key
+./target/release/slc notarize ./contract.pdf ./devnet/client.key 127.0.0.1:7000
+./target/release/slc get-proof <hash> 127.0.0.1:7000 proof.json
+./target/release/slc verify   proof.json ./devnet/genesis.json      # VALID ✔ — offline
 ```
 
-The `slc-node` binary runs a validator from a JSON config (`slc-node run
-config.json`); a 4-node network reaching consensus over real TCP is exercised by
-`crates/node/tests/devnet.rs`.
+### Anchoring to BSV
+The `slc-anchor` crate anchors periodic checkpoints. With the `notaryhash`
+feature, `NotaryHashAnchor` signs a checkpoint root with the chain's ML-DSA-65
+key and publishes it to **BSV mainnet** via notaryhash.com's OP_RETURN notarize
+API — the same post-quantum key that secures the chain signs its public anchor
+(cross-verified against notaryhash's FIPS 204 stack; confirmed live on-chain).
 
 ## Status
 
-The **value chain, consensus, and a running node are complete and tested** (26
-tests): attest → Merkle batch → block → quorum certificate → portable proof →
-verify; a full BFT engine that finalizes blocks, survives view changes, and
-generalizes across N-validator/F-fault thresholds; and a real 4-node network that
-notarizes a document over TCP and independently agrees on the block. Adversarial
-coverage includes forged hashes, substituted identities, insufficient quorums,
-outsider signatures, and crashed proposers. Public anchoring, attestation-
-triggered block production, and a client SDK/CLI are the next milestones.
+**End to end and tested** (42 tests, clippy clean): attest → Merkle batch →
+block → quorum certificate → portable proof → verify; a full BFT engine that
+finalizes blocks, survives view changes, and generalizes across
+N-validator/F-fault thresholds; attestation-triggered production (no empty
+blocks); real 4-node TCP networks that notarize, agree, persist, and **recover
+from reboot**; a client RPC + `slc` CLI for notarize/fetch/verify; and BSV
+mainnet anchoring verified live on-chain. Adversarial coverage includes forged
+hashes, substituted identities, insufficient quorums, outsider signatures,
+crashed proposers, wrong validator sets, and anchor tampering.
 
 ## Cryptography
 

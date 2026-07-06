@@ -19,3 +19,7 @@ base64 = { version = "0.22", optional = true }
 # Enables NotaryHashAnchor, which anchors checkpoints to BSV mainnet via the
 # notaryhash.com notarize API. Off by default to keep the core dependency-light.
 notaryhash = ["dep:ureq", "dep:base64"]
+
+[[example]]
+name = "notaryhash_anchor"
+required-features = ["notaryhash"]

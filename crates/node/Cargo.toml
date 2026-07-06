@@ -12,6 +12,10 @@ path = "src/lib.rs"
 name = "slc-node"
 path = "src/bin/slc-node.rs"
 
+[[bin]]
+name = "slc"
+path = "src/bin/slc.rs"
+
 [dependencies]
 slc-crypto.workspace = true
 slc-ledger.workspace = true

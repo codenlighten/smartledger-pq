@@ -38,6 +38,8 @@ pub struct Node {
     anchor: Option<AnchorService>,
     /// Observable log of every checkpoint this node has anchored.
     anchor_records: Arc<Mutex<Vec<AnchorRecord>>>,
+    /// Client-facing RPC listen address, when enabled.
+    rpc_addr: Option<String>,
 }
 
 /// A handle to a spawned node: submit attestations, observe commits, shut down.
@@ -109,6 +111,7 @@ impl Node {
             base_timeout,
             anchor: None,
             anchor_records: Arc::new(Mutex::new(Vec::new())),
+            rpc_addr: None,
         }
     }
 
@@ -118,12 +121,27 @@ impl Node {
         self
     }
 
+    /// Enable the client-facing RPC on `addr` (e.g. `0.0.0.0:7000`).
+    pub fn with_rpc(mut self, addr: impl Into<String>) -> Node {
+        self.rpc_addr = Some(addr.into());
+        self
+    }
+
     /// Run the node on its own thread, returning a handle.
     pub fn spawn(self) -> NodeHandle {
         let ev_tx = self.ev_tx.clone();
         let committed = self.store.handle();
         let anchor_records = self.anchor_records.clone();
         let local_addr = self.transport.local_addr();
+
+        // Start the client RPC before the loop moves onto its thread.
+        if let Some(addr) = &self.rpc_addr {
+            match std::net::TcpListener::bind(addr) {
+                Ok(listener) => crate::rpc::serve(listener, ev_tx.clone(), committed.clone()),
+                Err(e) => eprintln!("could not bind RPC on {addr}: {e}"),
+            }
+        }
+
         let join = thread::spawn(move || self.run());
         NodeHandle {
             ev_tx,

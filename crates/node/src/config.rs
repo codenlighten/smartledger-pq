@@ -58,6 +58,9 @@ pub struct NodeConfig {
     /// used.
     #[serde(default)]
     pub anchor_file: Option<String>,
+    /// Client-facing RPC listen address (e.g. `0.0.0.0:7000`). Disabled if unset.
+    #[serde(default)]
+    pub rpc_addr: Option<String>,
 }
 
 fn default_timeout_ms() -> u64 {

@@ -6,7 +6,8 @@
 //! and reconnected on failure, which tolerates peers starting in any order.
 
 use crate::event::Event;
-use crate::wire::{read_frame, write_frame, WireMsg};
+use crate::frame::{read_frame, write_frame};
+use crate::wire::WireMsg;
 use std::io;
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::mpsc::Sender;
@@ -79,7 +80,7 @@ impl Transport {
 
 fn reader_loop(mut stream: TcpStream, tx: Sender<Event>) {
     // Ends when the peer closes/sends garbage or the node loop is gone.
-    while let Ok(msg) = read_frame(&mut stream) {
+    while let Ok(msg) = read_frame::<_, WireMsg>(&mut stream) {
         if tx.send(Event::Wire(msg)).is_err() {
             break;
         }

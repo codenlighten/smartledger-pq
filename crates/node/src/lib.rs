@@ -17,11 +17,14 @@
 //! # }
 //! ```
 
+pub mod client;
 pub mod config;
 pub mod keystore;
+pub mod rpc;
 pub mod storage;
 
 mod event;
+mod frame;
 mod node;
 mod timers;
 mod transport;
@@ -29,6 +32,7 @@ mod wire;
 
 pub use event::Event;
 pub use node::{Node, NodeHandle};
+pub use rpc::{RpcRequest, RpcResponse};
 pub use transport::Transport;
 pub use wire::WireMsg;
 
