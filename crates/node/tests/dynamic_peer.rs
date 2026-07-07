@@ -1,13 +1,15 @@
-//! Runtime peer management: two isolated validators can't finalize; after an
-//! operator adds them to each other at runtime (no restart), the network
-//! converges and notarizes.
+//! Runtime peer management: a validator that existing nodes cannot reach is
+//! unable to follow the chain; after an operator meshes it in with `add-peer`
+//! (no restart), it catches up via block sync and then takes part in finalizing
+//! the next block — all on a realistic 4-validator (quorum-3) set.
 
 use slc_crypto::{Hash, SigningKey, VerifyingKey};
-use slc_ledger::Attestation;
+use slc_ledger::{Attestation, Block};
 use slc_node::client;
 use slc_node::config::{GenesisConfig, ValidatorInfo};
 use slc_node::{Node, NodeHandle, Transport};
 use std::net::TcpListener;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 mod common;
@@ -16,68 +18,94 @@ fn free_port() -> u16 {
     TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
 }
 
-#[test]
-fn add_peer_unsticks_a_disconnected_network() {
-    let _serial = common::serial();
-    // Two validators, each bound, each with its own RPC — but NO peers, so
-    // nothing can flow between them.
-    let mut prep: Vec<(Transport, SigningKey, VerifyingKey, String)> = Vec::new();
-    for _ in 0..2 {
-        let (sk, pk) = SigningKey::generate().unwrap();
-        let t = Transport::bind("127.0.0.1:0").unwrap();
-        let addr = t.local_addr().to_string();
-        prep.push((t, sk, pk, addr));
+fn wait_len(c: &Arc<Mutex<Vec<Block>>>, n: usize, within: Duration) -> Vec<Block> {
+    let deadline = Instant::now() + within;
+    loop {
+        {
+            let b = c.lock().unwrap();
+            if b.len() >= n {
+                return b.clone();
+            }
+        }
+        assert!(Instant::now() < deadline, "timed out waiting for {n} blocks");
+        std::thread::sleep(Duration::from_millis(100));
     }
-    let p2p_addrs: Vec<String> = prep.iter().map(|(_, _, _, a)| a.clone()).collect();
+}
+
+#[test]
+fn add_peer_lets_an_unreachable_validator_rejoin() {
+    let _serial = common::serial();
+
+    // Four validators (quorum 3). All four are in genesis.
+    let mut tp: Vec<Transport> = Vec::new();
+    let mut sk: Vec<SigningKey> = Vec::new();
+    let mut pk: Vec<VerifyingKey> = Vec::new();
+    for _ in 0..4 {
+        let (s, p) = SigningKey::generate().unwrap();
+        tp.push(Transport::bind("127.0.0.1:0").unwrap());
+        sk.push(s);
+        pk.push(p);
+    }
+    let addrs: Vec<String> = tp.iter().map(|t| t.local_addr().to_string()).collect();
     let genesis = GenesisConfig {
-        chain_id: "dynpeer".into(),
-        validators: prep
+        chain_id: "rejoin".into(),
+        validators: pk
             .iter()
-            .map(|(_, _, pk, addr)| ValidatorInfo { pubkey: pk.clone(), addr: addr.clone() })
+            .zip(&addrs)
+            .map(|(p, a)| ValidatorInfo { pubkey: p.clone(), addr: a.clone() })
             .collect(),
     };
+    let rpc: Vec<String> = (0..4).map(|_| format!("127.0.0.1:{}", free_port())).collect();
 
-    let rpc_addrs: Vec<String> = (0..2).map(|_| format!("127.0.0.1:{}", free_port())).collect();
+    // v0,v1,v2 are fully meshed and can finalize (quorum 3). v3 knows them and
+    // can send, but they do NOT know v3 — so v3 receives nothing and can't follow.
     let mut handles: Vec<NodeHandle> = Vec::new();
-    for (i, (mut transport, sk, pk, _)) in prep.into_iter().enumerate() {
-        transport.set_peers(vec![]); // deliberately isolated
-        let node = Node::new(transport, &genesis, sk, pk, None, Duration::from_millis(500))
-            .with_rpc(rpc_addrs[i].clone());
+    for i in 0..4 {
+        let mut transport = tp.remove(0);
+        let peers = if i < 3 {
+            vec![addrs[(i + 1) % 3].clone(), addrs[(i + 2) % 3].clone()]
+        } else {
+            vec![addrs[0].clone(), addrs[1].clone(), addrs[2].clone()]
+        };
+        transport.set_peers(peers);
+        let s = SigningKey::from_bytes(&sk[i].to_bytes()).unwrap();
+        let node = Node::new(transport, &genesis, s, pk[i].clone(), None, Duration::from_millis(500))
+            .with_rpc(rpc[i].clone());
         handles.push(node.spawn());
     }
     std::thread::sleep(Duration::from_millis(400));
 
-    // Submit a document to node 0. It cannot finalize (quorum is 2, and no
-    // messages can reach node 1).
+    // Notarize two documents: v0,v1,v2 finalize; v3 stays at nothing.
     let (c_sk, c_pk) = SigningKey::generate().unwrap();
-    let target = Hash::digest(b"dynamic-peer-doc");
-    handles[0].submit(Attestation::create(&c_sk, &c_pk, target).unwrap());
-
-    let observers: Vec<_> = handles.iter().map(|h| h.committed()).collect();
-    std::thread::sleep(Duration::from_secs(2));
-    assert!(
-        observers.iter().all(|o| o.lock().unwrap().is_empty()),
-        "isolated validators must not finalize"
-    );
-
-    // Operator meshes them at runtime — no restart.
-    assert!(client::add_peer(&rpc_addrs[0], &p2p_addrs[1]).unwrap());
-    assert!(client::add_peer(&rpc_addrs[1], &p2p_addrs[0]).unwrap());
-
-    // Now the network converges (re-gossip re-delivers the stuck round's
-    // messages) and notarizes. Generous deadline: the full suite runs CPU-heavy
-    // SLH-DSA tests in parallel that can starve this timing-sensitive scenario.
-    let deadline = Instant::now() + Duration::from_secs(120);
-    loop {
-        let done = observers
-            .iter()
-            .all(|o| o.lock().unwrap().iter().any(|b| b.attestations.iter().any(|a| a.hash == target)));
-        if done {
-            break;
-        }
-        assert!(Instant::now() < deadline, "network did not converge after add-peer");
-        std::thread::sleep(Duration::from_millis(100));
+    let v0c = handles[0].committed();
+    let v3c = handles[3].committed();
+    for i in 0..2 {
+        handles[0].submit(Attestation::create(&c_sk, &c_pk, Hash::digest(format!("d{i}").as_bytes())).unwrap());
+        wait_len(&v0c, i + 1, Duration::from_secs(30));
     }
+    let chain = v0c.lock().unwrap().clone();
+    assert_eq!(chain.len(), 2);
+    assert!(v3c.lock().unwrap().is_empty(), "unreachable validator can't follow");
+
+    // Operator meshes v3 into the others at runtime — now they can reach it.
+    for r in rpc.iter().take(3) {
+        assert!(client::add_peer(r, &addrs[3]).unwrap());
+    }
+
+    // v3 catches up to both blocks via block sync...
+    let synced = wait_len(&v3c, 2, Duration::from_secs(90));
+    for (a, b) in chain.iter().zip(synced.iter()) {
+        assert_eq!(a.header.id(), b.header.id());
+    }
+
+    // ...and now participates: a third notarization finalizes and v3 has it too.
+    handles[0].submit(Attestation::create(&c_sk, &c_pk, Hash::digest(b"d2-after-rejoin")).unwrap());
+    let v3_final = wait_len(&v3c, 3, Duration::from_secs(90));
+    assert_eq!(v3_final.len(), 3);
+    assert_eq!(v3_final[2].header.height, 3);
+    // It agrees with the leaders on the new block.
+    let leader_final = wait_len(&v0c, 3, Duration::from_secs(30));
+    assert_eq!(v3_final[2].header.id(), leader_final[2].header.id());
 
     for h in handles {
         h.shutdown();

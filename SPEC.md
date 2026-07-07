@@ -131,6 +131,10 @@ quorum(S) = |S| − f,  where  f = ⌊(|S|−1)/3⌋   (the BFT 2f+1-of-3f+1 rul
 e.g. |S|=4→quorum 3, |S|=7→quorum 5. Proposer for `(height, round)` is
 `sorted_by_id(S)[(height + round) mod |S|]`.
 
+Meaningful Byzantine fault tolerance requires **|S| ≥ 4** (so f ≥ 1). Smaller
+sets still finalize but tolerate no faults; in particular |S| = 2 (f = 0) is
+degenerate and should not be used as a BFT deployment.
+
 ---
 
 ## 5. Consensus — Quorum-Certified Notary BFT
