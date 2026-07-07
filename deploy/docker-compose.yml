@@ -19,18 +19,18 @@ x-node: &node
 services:
   node0:
     <<: *node
-    command: ["slc-node", "run", "/data/node0.config.json"]
+    command: ["run", "/data/node0.config.json"]
     ports:
       - "127.0.0.1:7000:7000" # client RPC exposed to the host
   node1:
     <<: *node
-    command: ["slc-node", "run", "/data/node1.config.json"]
+    command: ["run", "/data/node1.config.json"]
   node2:
     <<: *node
-    command: ["slc-node", "run", "/data/node2.config.json"]
+    command: ["run", "/data/node2.config.json"]
   node3:
     <<: *node
-    command: ["slc-node", "run", "/data/node3.config.json"]
+    command: ["run", "/data/node3.config.json"]
 
 networks:
   slc:

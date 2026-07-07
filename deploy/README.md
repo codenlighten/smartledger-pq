@@ -14,6 +14,12 @@ cargo build --release
 
 ## 2. Single node in Docker
 
+The image is a statically-linked binary on an empty (`scratch`) base — ~5 MB,
+no shell, no OS packages (nothing for a vulnerability scanner to flag). The
+container bootstraps itself (keygen, genesis, config) via `slc-node bootstrap`.
+Because there's no shell, run other tools by name, e.g.
+`docker run --rm --entrypoint slc <img> verify proof.json genesis.json`.
+
 Use the published image (or `docker build -t smartledger-chain:latest .` locally):
 
 ```sh

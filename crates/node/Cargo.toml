@@ -26,7 +26,9 @@ serde.workspace = true
 serde_json.workspace = true
 hex.workspace = true
 thiserror.workspace = true
+ureq = { version = "2", optional = true }
 
 [features]
-# Enables the BSV/notaryhash anchor backend end to end from the node.
-notaryhash = ["slc-anchor/notaryhash"]
+# Enables the BSV/notaryhash anchor backend end to end from the node, and the
+# genesis-URL fetch in `slc-node bootstrap` (both use rustls-backed ureq).
+notaryhash = ["slc-anchor/notaryhash", "dep:ureq"]

@@ -35,32 +35,142 @@ fn main() -> ExitCode {
             Some(out) => render_config(out),
             None => usage(),
         },
+        // Container entrypoint: keygen-if-absent, resolve genesis, render config,
+        // and run — all in-process, so the image needs no shell or curl.
+        Some("bootstrap") => bootstrap(),
         _ => usage(),
     }
+}
+
+/// Read a non-empty environment variable.
+fn env(k: &str) -> Option<String> {
+    std::env::var(k).ok().filter(|v| !v.is_empty())
+}
+
+/// HTTP GET for fetching a genesis over the network. Uses the same rustls-backed
+/// `ureq` the anchor backend uses; available when built with `notaryhash`.
+#[cfg(feature = "notaryhash")]
+fn http_get(url: &str) -> Result<String, String> {
+    ureq::get(url)
+        .call()
+        .map_err(|e| e.to_string())?
+        .into_string()
+        .map_err(|e| e.to_string())
+}
+#[cfg(not(feature = "notaryhash"))]
+fn http_get(_url: &str) -> Result<String, String> {
+    Err("genesis URL fetch needs the `notaryhash` feature; use SLC_GENESIS_JSON or mount a genesis file".into())
+}
+
+/// One-shot container bootstrap. Mirrors the old shell entrypoint in Rust:
+/// generate a keystore on first boot, resolve a genesis (inline JSON, a URL, a
+/// mounted file, or bootstrap a single-validator chain), render a config from
+/// `SLC_*` env, and run. A node whose key isn't in the set runs as a follower.
+fn bootstrap() -> ExitCode {
+    let data = env("SLC_DATA").unwrap_or_else(|| "/data".into());
+    let keystore_path = env("SLC_KEYSTORE").unwrap_or_else(|| format!("{data}/node.key"));
+    let store_path = env("SLC_STORE").unwrap_or_else(|| format!("{data}/blocks"));
+    let genesis_file = env("SLC_GENESIS_FILE").unwrap_or_else(|| format!("{data}/genesis.json"));
+    // Export the resolved paths so `render_config` reads the same locations.
+    std::env::set_var("SLC_KEYSTORE", &keystore_path);
+    std::env::set_var("SLC_STORE", &store_path);
+    std::env::set_var("SLC_GENESIS_FILE", &genesis_file);
+
+    if let Err(e) = std::fs::create_dir_all(&data) {
+        eprintln!("[bootstrap] cannot create {data}: {e}");
+        return ExitCode::FAILURE;
+    }
+
+    // 1. Keystore (persisted on the data volume) — generate once.
+    let pk = if Path::new(&keystore_path).exists() {
+        match keystore::load(Path::new(&keystore_path)) {
+            Ok((_, pk)) => pk,
+            Err(e) => {
+                eprintln!("[bootstrap] cannot load keystore {keystore_path}: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
+    } else {
+        eprintln!("[bootstrap] generating validator keystore at {keystore_path}");
+        match keystore::generate(Path::new(&keystore_path)) {
+            Ok((_, pk)) => pk,
+            Err(e) => {
+                eprintln!("[bootstrap] keygen failed: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
+    };
+    println!("[bootstrap] node public key: {}", pk.to_hex());
+
+    // 2. Genesis: inline JSON, a URL, a pre-mounted file, or bootstrap.
+    if !Path::new(&genesis_file).exists() {
+        if let Some(json) = env("SLC_GENESIS_JSON") {
+            if let Err(e) = std::fs::write(&genesis_file, json) {
+                eprintln!("[bootstrap] cannot write genesis: {e}");
+                return ExitCode::FAILURE;
+            }
+        } else if let Some(url) = env("SLC_GENESIS_URL") {
+            eprintln!("[bootstrap] fetching genesis from {url}");
+            match http_get(&url) {
+                Ok(body) => {
+                    if let Err(e) = std::fs::write(&genesis_file, body) {
+                        eprintln!("[bootstrap] cannot write genesis: {e}");
+                        return ExitCode::FAILURE;
+                    }
+                }
+                Err(e) => {
+                    eprintln!("[bootstrap] genesis fetch failed: {e}");
+                    return ExitCode::FAILURE;
+                }
+            }
+        }
+    }
+    if !Path::new(&genesis_file).exists() {
+        let addr = env("SLC_PUBLIC_ADDR").unwrap_or_else(|| "127.0.0.1:9000".into());
+        let chain = env("SLC_CHAIN_ID").unwrap_or_else(|| "smartledger".into());
+        eprintln!("[bootstrap] no genesis provided; bootstrapping single-validator chain ({addr})");
+        let g = format!(
+            r#"{{"chain_id":"{chain}","validators":[{{"pubkey":"{}","addr":"{addr}"}}]}}"#,
+            pk.to_hex()
+        );
+        if let Err(e) = std::fs::write(&genesis_file, g) {
+            eprintln!("[bootstrap] cannot write genesis: {e}");
+            return ExitCode::FAILURE;
+        }
+    }
+
+    // 3. Render the node config from env + genesis.
+    let config = format!("{data}/config.json");
+    if let Err(e) = write_config(&config) {
+        eprintln!("[bootstrap] {e}");
+        return ExitCode::FAILURE;
+    }
+
+    // 4. Run.
+    run(&config)
 }
 
 /// Build a node config JSON from environment variables (for containers/cloud).
 /// Reads a genesis file at $SLC_GENESIS_FILE and emits a config to `out`.
 fn render_config(out: &str) -> ExitCode {
-    let env = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
+    match write_config(out) {
+        Ok(()) => {
+            println!("wrote config: {out}");
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("{e}");
+            ExitCode::FAILURE
+        }
+    }
+}
 
-    let genesis_file = match env("SLC_GENESIS_FILE") {
-        Some(f) => f,
-        None => {
-            eprintln!("SLC_GENESIS_FILE is required");
-            return ExitCode::FAILURE;
-        }
-    };
-    let genesis: GenesisConfig = match std::fs::read_to_string(&genesis_file)
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-    {
-        Some(g) => g,
-        None => {
-            eprintln!("could not read/parse genesis at {genesis_file}");
-            return ExitCode::FAILURE;
-        }
-    };
+/// Core of `render-config`: emit a `NodeConfig` from `SLC_*` env + genesis file.
+fn write_config(out: &str) -> Result<(), String> {
+    let genesis_file = env("SLC_GENESIS_FILE").ok_or("SLC_GENESIS_FILE is required")?;
+    let genesis: GenesisConfig = std::fs::read_to_string(&genesis_file)
+        .map_err(|e| format!("could not read genesis at {genesis_file}: {e}"))
+        .and_then(|s| serde_json::from_str(&s).map_err(|e| format!("could not parse genesis: {e}")))?;
 
     let cfg = NodeConfig {
         genesis,
@@ -80,22 +190,8 @@ fn render_config(out: &str) -> ExitCode {
         license_issuer_pubkey: env("SLC_LICENSE_ISSUER_PUBKEY"),
     };
 
-    match serde_json::to_string_pretty(&cfg) {
-        Ok(json) => match std::fs::write(out, json) {
-            Ok(()) => {
-                println!("wrote config: {out}");
-                ExitCode::SUCCESS
-            }
-            Err(e) => {
-                eprintln!("write failed: {e}");
-                ExitCode::FAILURE
-            }
-        },
-        Err(e) => {
-            eprintln!("serialize failed: {e}");
-            ExitCode::FAILURE
-        }
-    }
+    let json = serde_json::to_string_pretty(&cfg).map_err(|e| format!("serialize failed: {e}"))?;
+    std::fs::write(out, json).map_err(|e| format!("write failed: {e}"))
 }
 
 fn usage() -> ExitCode {
@@ -104,6 +200,7 @@ fn usage() -> ExitCode {
     eprintln!("  slc-node run <config.json>");
     eprintln!("  slc-node init-devnet <dir> [num_nodes=4]");
     eprintln!("  slc-node render-config <out.json>   (from SLC_* env vars)");
+    eprintln!("  slc-node bootstrap                  (container entrypoint: keygen+genesis+run)");
     ExitCode::FAILURE
 }
 
