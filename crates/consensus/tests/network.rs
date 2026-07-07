@@ -9,7 +9,7 @@
 
 use slc_consensus::{ConsensusMsg, Effect, Engine, TimeoutKind};
 use slc_crypto::{Hash, SigningKey, VerifyingKey};
-use slc_ledger::{Attestation, Block, NotarizationProof, ValidatorSet};
+use slc_ledger::{Attestation, Block, NotarizationProof, ValidatorRegistry, ValidatorSet};
 use std::collections::VecDeque;
 
 struct Sim {
@@ -219,6 +219,39 @@ fn view_change_recovers_from_crashed_proposer() {
     for &i in &honest {
         assert_eq!(sim.commits[i][0].header.id(), block.header.id());
     }
+}
+
+#[test]
+fn apply_synced_block_accepts_valid_and_rejects_bad() {
+    // Produce a genuinely finalized block on a 4-validator network.
+    let mut sim = Sim::new(4);
+    sim.start();
+    let att = client_attestation(b"sync-me");
+    sim.submit_to_all(&att);
+    sim.run();
+    let block = sim.commits[sim.honest()[0]][0].clone();
+    let registry = ValidatorRegistry::new(sim.set.validators().to_vec());
+
+    // A fresh, non-validator engine can apply the finalized block by verifying
+    // its quorum certificate, advancing height 1 → 2.
+    let (sk, pk) = SigningKey::generate().unwrap();
+    let mut follower = Engine::with_registry(registry.clone(), sk, pk, Hash::zero(), 1);
+    follower.apply_synced_block(&block).expect("valid finalized block applies");
+    assert_eq!(follower.height(), 2);
+    assert_eq!(follower.tip(), block.header.id());
+
+    // Wrong height: applying the same block again (now expecting height 2) fails.
+    assert!(follower.apply_synced_block(&block).is_err());
+
+    // Tampered quorum certificate is rejected.
+    let (sk2, pk2) = SigningKey::generate().unwrap();
+    let mut fresh = Engine::with_registry(registry, sk2, pk2, Hash::zero(), 1);
+    let mut forged = block.clone();
+    forged.qc.signatures.clear(); // no quorum
+    assert!(fresh.apply_synced_block(&forged).is_err());
+    // The untampered block still applies to the fresh engine.
+    fresh.apply_synced_block(&block).expect("valid block applies to fresh engine");
+    assert_eq!(fresh.height(), 2);
 }
 
 #[test]

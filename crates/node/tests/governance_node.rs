@@ -15,6 +15,8 @@ use std::net::TcpListener;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+mod common;
+
 const JOIN_HEIGHT: u64 = 3;
 
 fn free_port() -> u16 {
@@ -36,6 +38,7 @@ fn wait_height(committed: &Arc<Mutex<Vec<Block>>>, h: u64, within: Duration) -> 
 
 #[test]
 fn a_validator_joins_a_live_network_via_rpc_governance() {
+    let _serial = common::serial();
     // Five keypairs and transports; the first four are the genesis validators.
     let mut sks = Vec::new();
     let mut pks = Vec::new();

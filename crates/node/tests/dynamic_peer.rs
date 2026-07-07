@@ -10,12 +10,15 @@ use slc_node::{Node, NodeHandle, Transport};
 use std::net::TcpListener;
 use std::time::{Duration, Instant};
 
+mod common;
+
 fn free_port() -> u16 {
     TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
 }
 
 #[test]
 fn add_peer_unsticks_a_disconnected_network() {
+    let _serial = common::serial();
     // Two validators, each bound, each with its own RPC — but NO peers, so
     // nothing can flow between them.
     let mut prep: Vec<(Transport, SigningKey, VerifyingKey, String)> = Vec::new();

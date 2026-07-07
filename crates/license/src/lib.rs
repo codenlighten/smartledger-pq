@@ -200,8 +200,20 @@ mod tests {
         }
     }
 
+    /// Serialize CPU-heavy SLH-DSA signing across the workspace (see the note in
+    /// `slc-crypto`'s slh tests) so it doesn't starve parallel TCP tests.
+    fn slh_serial() -> std::net::TcpListener {
+        loop {
+            if let Ok(l) = std::net::TcpListener::bind("127.0.0.1:59717") {
+                return l;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+    }
+
     #[test]
     fn issue_verify_and_reject_all_the_ways() {
+        let _serial = slh_serial();
         // One (slow) SLH-DSA signature, reused across every check.
         let issuer = LicenseIssuer::generate().unwrap();
         let now = 1_751_000_000;

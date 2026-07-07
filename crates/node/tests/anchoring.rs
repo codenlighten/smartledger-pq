@@ -12,6 +12,8 @@ use slc_node::AnchorRecord;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+mod common;
+
 const INTERVAL: usize = 2;
 
 fn wait_until<T>(mut f: impl FnMut() -> Option<T>, within: Duration) -> T {
@@ -27,6 +29,7 @@ fn wait_until<T>(mut f: impl FnMut() -> Option<T>, within: Duration) -> T {
 
 #[test]
 fn live_network_anchors_a_checkpoint_and_proof_verifies() {
+    let _serial = common::serial();
     // Stand up four validators, each anchoring every INTERVAL blocks.
     let mut prep: Vec<(Transport, SigningKey, VerifyingKey)> = Vec::new();
     for _ in 0..4 {

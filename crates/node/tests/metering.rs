@@ -9,12 +9,15 @@ use slc_node::{Node, Transport};
 use std::net::TcpListener;
 use std::time::Duration;
 
+mod common;
+
 fn free_port() -> u16 {
     TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
 }
 
 #[test]
 fn metering_enforces_the_licensed_cap() {
+    let _serial = common::serial();
     // A single-validator chain is enough to exercise the RPC meter.
     let (sk, pk): (SigningKey, VerifyingKey) = SigningKey::generate().unwrap();
     let mut transport = Transport::bind("127.0.0.1:0").unwrap();

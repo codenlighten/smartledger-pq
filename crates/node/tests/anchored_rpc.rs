@@ -10,6 +10,8 @@ use slc_node::{Node, NodeHandle, Transport};
 use std::net::TcpListener;
 use std::time::{Duration, Instant};
 
+mod common;
+
 const INTERVAL: usize = 2;
 
 fn free_port() -> u16 {
@@ -26,6 +28,7 @@ fn wait_notarized(rpc: &str, hash: Hash) {
 
 #[test]
 fn anchored_proof_over_rpc() {
+    let _serial = common::serial();
     let mut prep: Vec<(Transport, SigningKey, VerifyingKey)> = Vec::new();
     for _ in 0..4 {
         let (sk, pk) = SigningKey::generate().unwrap();

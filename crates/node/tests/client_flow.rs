@@ -9,6 +9,8 @@ use slc_node::{Node, NodeHandle, Transport};
 use std::net::TcpListener;
 use std::time::{Duration, Instant};
 
+mod common;
+
 fn free_port() -> u16 {
     TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
 }
@@ -28,6 +30,7 @@ fn genesis_from(prep: &[(Transport, SigningKey, VerifyingKey)]) -> GenesisConfig
 
 #[test]
 fn notarize_fetch_and_verify_via_client() {
+    let _serial = common::serial();
     let mut prep: Vec<(Transport, SigningKey, VerifyingKey)> = Vec::new();
     for _ in 0..4 {
         let (sk, pk) = SigningKey::generate().unwrap();

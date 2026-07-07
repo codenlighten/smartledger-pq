@@ -162,8 +162,22 @@ mod tests {
 
     const CTX: &[u8] = b"slc-license-test";
 
+    /// SLH-DSA signing is CPU-heavy (~seconds). Serialize these tests across the
+    /// whole workspace (via an OS-held port) so they peg at most one core and
+    /// don't starve the I/O-timed multi-node TCP integration tests running in
+    /// parallel. The OS releases the port if a test process dies (no stale lock).
+    fn slh_serial() -> std::net::TcpListener {
+        loop {
+            if let Ok(l) = std::net::TcpListener::bind("127.0.0.1:59717") {
+                return l;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+    }
+
     #[test]
     fn sign_and_verify_roundtrip() {
+        let _serial = slh_serial();
         let (sk, pk) = SlhSigningKey::generate().unwrap();
         let sig = sk.sign(b"license bytes", CTX).unwrap();
         assert!(pk.verify(b"license bytes", &sig, CTX));
@@ -171,6 +185,7 @@ mod tests {
 
     #[test]
     fn tampered_message_or_context_fails() {
+        let _serial = slh_serial();
         let (sk, pk) = SlhSigningKey::generate().unwrap();
         let sig = sk.sign(b"original", CTX).unwrap();
         assert!(!pk.verify(b"tampered", &sig, CTX));
@@ -179,6 +194,7 @@ mod tests {
 
     #[test]
     fn wrong_key_fails() {
+        let _serial = slh_serial();
         let (sk, _pk) = SlhSigningKey::generate().unwrap();
         let (_sk2, pk2) = SlhSigningKey::generate().unwrap();
         let sig = sk.sign(b"m", CTX).unwrap();
@@ -187,6 +203,7 @@ mod tests {
 
     #[test]
     fn hex_roundtrips() {
+        let _serial = slh_serial();
         let (sk, pk) = SlhSigningKey::generate().unwrap();
         let sig = sk.sign(b"m", CTX).unwrap();
         assert_eq!(SLH_SIG_LEN, 7856);

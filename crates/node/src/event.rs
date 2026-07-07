@@ -19,6 +19,8 @@ pub enum Event {
     AddPeer(String),
     /// Periodic tick to re-gossip current-round messages (partition recovery).
     Regossip,
+    /// Periodic tick to poll peers for missing blocks (catch-up).
+    SyncPoll,
     /// Stop the loop.
     Shutdown,
 }

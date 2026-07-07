@@ -26,6 +26,11 @@ fn now_unix() -> u64 {
         .unwrap_or(0)
 }
 
+/// Max finalized blocks served per catch-up response (bounds the frame size).
+const MAX_SYNC_BATCH: u64 = 50;
+/// How often a node polls peers for missing blocks.
+const SYNC_POLL_INTERVAL: Duration = Duration::from_secs(2);
+
 /// A running node. Build with [`Node::new`], then [`Node::spawn`].
 pub struct Node {
     engine: Engine,
@@ -190,6 +195,16 @@ impl Node {
             }
         });
 
+        // Periodic catch-up poll so a lagging or late-joining node fetches the
+        // finalized blocks it is missing.
+        let sync_tx = ev_tx.clone();
+        thread::spawn(move || loop {
+            thread::sleep(SYNC_POLL_INTERVAL);
+            if sync_tx.send(crate::event::Event::SyncPoll).is_err() {
+                break;
+            }
+        });
+
         let join = thread::spawn(move || self.run());
         NodeHandle {
             ev_tx,
@@ -229,6 +244,48 @@ impl Node {
                     Vec::new()
                 }
                 Event::Regossip => self.engine.regossip(),
+                Event::SyncPoll => {
+                    // Ask peers for anything past our tip. Cheap when caught up
+                    // (peers have no such block, so no response).
+                    self.transport.broadcast(&WireMsg::GetBlocks {
+                        from: self.engine.height(),
+                    });
+                    Vec::new()
+                }
+                Event::Wire(WireMsg::GetBlocks { from }) => {
+                    let batch: Vec<Block> = self
+                        .store
+                        .snapshot()
+                        .into_iter()
+                        .filter(|b| {
+                            b.header.height >= from && b.header.height < from + MAX_SYNC_BATCH
+                        })
+                        .collect();
+                    if !batch.is_empty() {
+                        self.transport.broadcast(&WireMsg::Blocks(batch));
+                    }
+                    Vec::new()
+                }
+                Event::Wire(WireMsg::Blocks(mut blocks)) => {
+                    blocks.sort_by_key(|b| b.header.height);
+                    let mut applied = false;
+                    for b in &blocks {
+                        if b.header.height == self.engine.height() {
+                            match self.engine.apply_synced_block(b) {
+                                Ok(()) => {
+                                    self.store.append(b);
+                                    applied = true;
+                                }
+                                Err(_) => break, // out of order / invalid: stop
+                            }
+                        }
+                    }
+                    if applied {
+                        self.engine.resume()
+                    } else {
+                        Vec::new()
+                    }
+                }
                 Event::Shutdown => {
                     self.timers.stop();
                     break;

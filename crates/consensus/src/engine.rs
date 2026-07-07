@@ -240,6 +240,70 @@ impl Engine {
         self.parked
     }
 
+    /// Apply an already-finalized block received from a peer during catch-up.
+    /// The block must be the engine's next expected block, chain onto the tip,
+    /// be structurally valid, and carry a quorum certificate that finalizes it
+    /// under the set in force at its height. On success the engine advances
+    /// exactly as a local commit would (recording governance, rolling the set).
+    pub fn apply_synced_block(&mut self, block: &Block) -> Result<(), String> {
+        if block.header.height != self.height {
+            return Err(format!(
+                "expected height {}, got {}",
+                self.height, block.header.height
+            ));
+        }
+        if block.header.prev_hash != self.tip {
+            return Err("prev_hash does not chain onto our tip".into());
+        }
+        let value = Proposed {
+            header: block.header.clone(),
+            attestations: block.attestations.clone(),
+            governance: block.governance.clone(),
+        };
+        if !value.is_valid(self.tip, self.height, &self.current_set) {
+            return Err("block failed structural validation".into());
+        }
+        block
+            .qc
+            .verify(&block.header, &self.current_set)
+            .map_err(|e| format!("quorum certificate invalid: {e:?}"))?;
+
+        // Enact governance and drop any now-sealed attestations from the mempool.
+        for signed in &block.governance {
+            self.registry.record(signed.change.clone());
+        }
+        let sealed: HashSet<Hash> = block.attestations.iter().map(|a| a.leaf_hash()).collect();
+        self.mempool.retain(|a| !sealed.contains(&a.leaf_hash()));
+
+        // Roll forward — identical to the post-commit reset.
+        self.height += 1;
+        self.tip = block.header.id();
+        self.reload_set();
+        self.round = 0;
+        self.step = Step::Propose;
+        self.locked_value = None;
+        self.locked_round = None;
+        self.valid_value = None;
+        self.valid_round = None;
+        self.proposals.clear();
+        self.prevotes.clear();
+        self.precommits.clear();
+        self.prevote_timeout_started.clear();
+        self.precommit_timeout_started.clear();
+        self.polka_applied.clear();
+        self.parked = false;
+        Ok(())
+    }
+
+    /// Re-enter the current height's round 0 after catching up, so the engine
+    /// proposes or idles as appropriate and processes live messages again.
+    pub fn resume(&mut self) -> Vec<Effect> {
+        let mut out = Vec::new();
+        self.start_round(0, &mut out);
+        self.advance(&mut out);
+        out
+    }
+
     /// Re-broadcast this node's current-round messages (its proposal if it is
     /// the proposer, plus its prevote and precommit). Called periodically so
     /// that peers which were unreachable when a message was first sent — a

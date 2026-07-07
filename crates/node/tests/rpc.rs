@@ -9,6 +9,8 @@ use slc_node::{Node, NodeHandle, Transport};
 use std::net::TcpListener;
 use std::time::{Duration, Instant};
 
+mod common;
+
 fn free_port() -> u16 {
     TcpListener::bind("127.0.0.1:0")
         .unwrap()
@@ -19,6 +21,7 @@ fn free_port() -> u16 {
 
 #[test]
 fn client_rpc_submit_then_fetch_proof() {
+    let _serial = common::serial();
     // Four validators; node 0 also exposes a client RPC.
     let mut prep: Vec<(Transport, SigningKey, VerifyingKey)> = Vec::new();
     for _ in 0..4 {

@@ -81,8 +81,19 @@ mod tests {
         assert!(check(&base_cfg(), "acme", 1000).unwrap().is_none());
     }
 
+    /// Serialize CPU-heavy SLH-DSA signing across the workspace (see slc-crypto).
+    fn slh_serial() -> std::net::TcpListener {
+        loop {
+            if let Ok(l) = std::net::TcpListener::bind("127.0.0.1:59717") {
+                return l;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+    }
+
     #[test]
     fn valid_license_grants_entitlements_and_expiry_is_enforced() {
+        let _serial = slh_serial();
         let dir = std::env::temp_dir().join(format!("slc-lic-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);
         let path = dir.join("license.json");

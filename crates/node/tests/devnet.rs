@@ -11,6 +11,8 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+mod common;
+
 type Observer = Arc<Mutex<Vec<Block>>>;
 
 fn block_with_hash(blocks: &Observer, target: Hash) -> Option<Block> {
@@ -37,6 +39,7 @@ fn wait_all(observers: &[Observer], target: Hash, within: Duration) -> Block {
 
 #[test]
 fn four_node_devnet_notarizes_over_tcp() {
+    let _serial = common::serial();
     // 1. Four validators, each with a bound loopback listener.
     let mut prep: Vec<(Transport, SigningKey, VerifyingKey)> = Vec::new();
     for _ in 0..4 {
@@ -179,6 +182,7 @@ fn spawn_net(
 
 #[test]
 fn restart_resumes_and_chains_across_reboot() {
+    let _serial = common::serial();
     // A private per-run scratch dir for the on-disk chain.
     let dir = std::env::temp_dir().join(format!("slc-resume-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
