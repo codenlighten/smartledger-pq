@@ -14,17 +14,20 @@ cargo build --release
 
 ## 2. Single node in Docker
 
+Use the published image (or `docker build -t smartledger-chain:latest .` locally):
+
 ```sh
-docker build -t smartledger-chain:latest .
+IMG=ghcr.io/codenlighten/smartledger-pq:latest
+docker pull $IMG
 
 # Bootstrap a brand-new single-validator chain:
 docker run -d --name slc -p 9000:9000 -p 7000:7000 -v slc-data:/data \
-  -e SLC_PUBLIC_ADDR=<public-ip>:9000 smartledger-chain:latest
+  -e SLC_PUBLIC_ADDR=<public-ip>:9000 $IMG
 
 # ...or join an existing chain by pointing at its genesis:
 docker run -d --name slc -p 9000:9000 -p 7000:7000 -v slc-data:/data \
   -e SLC_GENESIS_URL=https://example.com/genesis.json \
-  -e SLC_PUBLIC_ADDR=<public-ip>:9000 smartledger-chain:latest
+  -e SLC_PUBLIC_ADDR=<public-ip>:9000 $IMG
 
 docker logs slc | grep 'public key'      # this node's PQ identity
 ```
@@ -62,8 +65,9 @@ aws cloudformation deploy \
 
 Leave `GenesisUrl` blank to bootstrap a new chain. Stack **Outputs** give the
 p2p/RPC endpoints, the SSH command, and how to read the node's public key
-(`slc node-info <ip>:7000`). Publish the node image to a registry and set
-`DockerImage` accordingly. For a "Launch Stack" button, host the template on S3
+(`slc node-info <ip>:7000`). The `DockerImage` parameter defaults to the
+published image `ghcr.io/codenlighten/smartledger-pq:latest` (must be public, or
+add registry auth to the UserData). For a "Launch Stack" button, host the template on S3
 and link `https://console.aws.amazon.com/cloudformation/home#/stacks/create/review?templateURL=<s3-url>`.
 
 ## Admitting a validator

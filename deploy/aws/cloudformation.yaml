@@ -21,8 +21,8 @@ Metadata:
 Parameters:
   DockerImage:
     Type: String
-    Default: ghcr.io/smartledger/smartledger-chain:latest
-    Description: Published node image to run.
+    Default: ghcr.io/codenlighten/smartledger-pq:latest
+    Description: Published node image to run (must be public, or add registry auth to UserData).
   InstanceType:
     Type: String
     Default: t3.small

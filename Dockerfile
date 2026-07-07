@@ -9,6 +9,9 @@ RUN cargo build --release -p slc-node --bins --features notaryhash
 
 # Runtime stage: slim, just the two binaries + entrypoint.
 FROM debian:bookworm-slim
+LABEL org.opencontainers.image.source="https://github.com/codenlighten/smartledger-pq"
+LABEL org.opencontainers.image.description="SmartLedger-Chain — post-quantum permissioned notary chain node"
+LABEL org.opencontainers.image.licenses="MIT OR Apache-2.0"
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
