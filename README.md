@@ -1,5 +1,7 @@
 # SmartLedger-Chain
 
+> **Status: experimental.** Claims in this README about scale, speed, security or readiness are design goals or earlier drafts unless they point to a test, measurement or audit report. No independent audit is claimed.
+
 A **post-quantum, permissioned notary chain**. Legally-known actors run the
 nodes; the more of them there are, the harder history is to forge. Its single
 job is done elegantly: **prove a piece of data existed in an exact form at an
